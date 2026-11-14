@@ -1,0 +1,21 @@
+# data + evaluation (CPU is fine)
+curatorkit[all]
+auditkit[all]
+litellm
+pypdf
+rank_bm25
+sentence-transformers
+tqdm
+matplotlib
+python-dotenv
+
+# training + inference (GPU: Kaggle)
+aligntune
+unsloth
+transformers
+peft
+bitsandbytes
+accelerate
+datasets
+trl
+gradio

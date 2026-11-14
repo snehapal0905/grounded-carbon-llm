@@ -1,0 +1,13 @@
+# secrets
+.env
+# environments / caches
+.venv/
+__pycache__/
+*.npy
+# large or regenerable data (PDFs are public; download links in docs/SOURCES.md)
+data/raw/
+data/work/
+# training artefacts (published to Hugging Face instead)
+outputs/run/
+outputs/adapter/
+*.log
