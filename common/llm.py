@@ -1,6 +1,7 @@
 """Thin LiteLLM wrapper: disk cache (re-runs cost nothing), rate-limit backoff, JSON parsing."""
 import hashlib
 import json
+import os
 import re
 import threading
 import time
@@ -30,20 +31,34 @@ def _load_cache():
     return _cache
 
 
+# Answers already produced by another model can be reused (e.g. Groq answers saved on the laptop
+# before switching to a local Ollama model on Kaggle): CACHE_FALLBACK_MODELS="groq/openai/gpt-oss-120b,..."
+_FALLBACKS = [m for m in os.getenv("CACHE_FALLBACK_MODELS", "").split(",") if m]
+_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "120"))
+
+
+def _key(model, messages, temperature, max_tokens):
+    return hashlib.sha256(json.dumps([model, messages, temperature, max_tokens]).encode()).hexdigest()
+
+
 def chat(model, messages, temperature=0.0, max_tokens=900, retries=8):
     import litellm
     litellm.suppress_debug_info = True
-    key = hashlib.sha256(json.dumps([model, messages, temperature, max_tokens]).encode()).hexdigest()
+    key = _key(model, messages, temperature, max_tokens)
     cache = _load_cache()
     if key in cache:
         return cache[key]
+    for fb in _FALLBACKS:
+        k2 = _key(fb, messages, temperature, max_tokens)
+        if cache.get(k2):
+            return cache[k2]
     delay = 4.0
     for attempt in range(retries):
         try:
             extra = {"reasoning_effort": "low"} if "gpt-oss" in model else {}
             r = litellm.completion(model=model, messages=messages,
                                    temperature=temperature, max_tokens=max_tokens,
-                                   timeout=120, **extra)  # never hang forever on a dead socket
+                                   timeout=_TIMEOUT, **extra)  # never hang forever on a dead socket
             text = r.choices[0].message.content or ""
             break
         except Exception as e:  # rate limits / transient errors
