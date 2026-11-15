@@ -60,7 +60,5 @@ class Generator:
 
 
 def clean_output(text):
-    """Drop a stray leading chat-role header ("assistant
-") that the fine-tuned model emits."""
-    return re.sub(r"^\s*(assistant\s*
-)+", "", text).strip()
+    """Drop a stray leading chat-role header (assistant + newline) that the fine-tuned model emits."""
+    return re.sub(r"^\s*(assistant[ \t]*\r?\n)+", "", text).strip()
