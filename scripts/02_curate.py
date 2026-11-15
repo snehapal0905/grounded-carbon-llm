@@ -40,7 +40,9 @@ def select_chunks(chunks):
 
 
 def run_curatorkit(selected):
+    import os
     from curatorkit import Curator, CuratorConfig
+    TIMEOUT = float(os.getenv("LLM_TIMEOUT", "180"))
 
     inp = WORK / "curator_input.jsonl"
     with open(inp, "w", encoding="utf-8") as f:
@@ -60,11 +62,11 @@ def run_curatorkit(selected):
         clean=True,
         export_formats=["alpaca"],
         llm_concurrency=LLM_CONCURRENCY,
-        # free-tier friendly: many retries (429s back off), low reasoning effort for gpt-oss judge
-        generator_llm={"max_retries": 12, "timeout": 180, "temperature": 0.4, "max_tokens": 2000,
-                       "extra_body": {"reasoning_effort": "low"}},
+        # many retries (API 429s back off); long timeout for a local GPU model under load
+        generator_llm={"max_retries": 12, "timeout": TIMEOUT, "temperature": 0.4, "max_tokens": 2000,
+                       **({"extra_body": {"reasoning_effort": "low"}} if "gpt-oss" in GEN_MODEL else {})},
         hallucination_llm={"model": GATE_MODEL, "temperature": 0.0, "max_tokens": 400,
-                           "max_retries": 12, "timeout": 180},
+                           "max_retries": 12, "timeout": TIMEOUT},
         output_dir=str(out_dir),
     )).run()
     result.print_summary()
