@@ -172,7 +172,12 @@ def main():
             for name, h in run_auditkit(preds_by_sys, not args.no_auditkit_judge).items():
                 all_m[name]["auditkit"] = h
         except Exception as e:
-            print(f"AuditKIT step failed ({e}); grounding-judge metrics are still saved.")
+            print(f"AuditKIT with LLM judge failed ({e}); retrying with AuditKIT's lexical metrics only.")
+            try:
+                for name, h in run_auditkit(preds_by_sys, False).items():
+                    all_m[name]["auditkit"] = h
+            except Exception as e2:
+                print(f"AuditKIT step failed ({e2}); grounding-judge metrics are still saved.")
 
     json.dump(all_m, open(RES / "metrics.json", "w"), indent=2)
     pct = lambda x: "-" if x != x else f"{x * 100:.1f}%"  # noqa: E731
