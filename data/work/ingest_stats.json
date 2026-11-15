@@ -1,0 +1,44 @@
+{
+  "per_doc": {
+    "Article6.4_Activity_Standard_Projects_v2.0": {
+      "train": 44,
+      "test": 18,
+      "buffer": 6
+    },
+    "Article6.4_Methodology_Standard": {
+      "train": 16,
+      "test": 6,
+      "buffer": 1
+    },
+    "GoldStandard_Principles_Requirements_v2.1": {
+      "train": 39,
+      "test": 6,
+      "buffer": 2
+    },
+    "ICVCM_Core_Carbon_Principles_v3": {
+      "train": 120,
+      "test": 30,
+      "buffer": 8
+    },
+    "India_CCTS_2023_Notification": {
+      "train": 10,
+      "test": 0,
+      "buffer": 0
+    },
+    "VCS_Program_Guide_v5.0": {
+      "train": 26,
+      "test": 0,
+      "buffer": 0
+    },
+    "VCS_Standard_v5.0": {
+      "train": 105,
+      "test": 6,
+      "buffer": 2
+    }
+  },
+  "total": {
+    "train": 360,
+    "test": 66,
+    "buffer": 19
+  }
+}
