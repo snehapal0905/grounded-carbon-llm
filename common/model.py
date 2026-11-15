@@ -4,6 +4,7 @@ One copy of the weights serves both "base" and "fine-tuned" (peft.disable_adapte
 so the side-by-side comparison fits on a single 16 GB T4.
 """
 import contextlib
+import re
 
 import torch
 
@@ -47,8 +48,19 @@ class Generator:
                 prompts = [self.tok.apply_chat_template(m, tokenize=False, add_generation_prompt=True)
                            for m in batch_messages[i:i + batch_size]]
                 enc = self.tok(prompts, return_tensors="pt", padding=True).to(self.model.device)
+                extra = {}
+                if tuned:  # the LoRA learned to emit an extra "<|im_start|>assistant" header / early stop
+                    stop_ids = {self.tok.convert_tokens_to_ids("<|im_end|>"), self.tok.eos_token_id}
+                    extra["begin_suppress_tokens"] = [i for i in stop_ids if i is not None]
                 gen = self.model.generate(**enc, max_new_tokens=max_new_tokens, do_sample=False,
                                           temperature=None, top_p=None, top_k=None,
-                                          pad_token_id=self.tok.pad_token_id)
+                                          pad_token_id=self.tok.pad_token_id, **extra)
                 outs += self.tok.batch_decode(gen[:, enc["input_ids"].shape[1]:], skip_special_tokens=True)
-        return [o.strip() for o in outs]
+        return [clean_output(o) for o in outs]
+
+
+def clean_output(text):
+    """Drop a stray leading chat-role header ("assistant
+") that the fine-tuned model emits."""
+    return re.sub(r"^\s*(assistant\s*
+)+", "", text).strip()
