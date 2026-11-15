@@ -1,0 +1,6 @@
+{
+ "base_rag":    {"hallucination_rate": 0.1733, "ci": [0.1133, 0.2333], "correct_refusal_rate": 0.7333, "unanswerable_hallucinated": 0.1167, "accuracy": 0.2667, "accuracy_incl_partial": 0.9556, "over_refusal_rate": 0.0333, "over_refusal_when_evidence_retrieved": 0.0, "citation_rate": 0.068, "ak": {"lexical_groundedness": 0.8504, "context_coverage": 0.7969, "f1_score": 0.2767}},
+ "base_strict": {"hallucination_rate": 0.0467, "ci": [0.02, 0.08], "correct_refusal_rate": 1.0, "unanswerable_hallucinated": 0.0, "accuracy": 0.30, "accuracy_incl_partial": 0.9333, "over_refusal_rate": 0.0667, "over_refusal_when_evidence_retrieved": 0.0143, "citation_rate": 1.0, "ak": {"lexical_groundedness": 0.8305, "context_coverage": 0.7969, "f1_score": 0.7085}},
+ "tuned_rag":   {"hallucination_rate": 0.0133, "ci": [0.0, 0.0333], "correct_refusal_rate": 1.0, "unanswerable_hallucinated": 0.0, "accuracy": 0.50, "accuracy_incl_partial": 0.8778, "over_refusal_rate": 0.1222, "over_refusal_when_evidence_retrieved": 0.0429, "citation_rate": 0.9747, "ak": {"lexical_groundedness": 0.8211, "context_coverage": 0.7969, "f1_score": 0.7355}},
+ "_meta": {"test_set": "90 answerable + 60 unanswerable", "judge": "ollama_chat/qwen2.5:14b", "retrieval_recall_at_4": 0.778, "source": "outputs/results/metrics.json on the Colab run of 2026-11-16"}
+}

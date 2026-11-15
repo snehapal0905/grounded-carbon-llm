@@ -10,9 +10,9 @@
 organisation's own documents, train a model that answers only from them, says so when the answer is
 missing, and makes measurably fewer unsupported claims.
 
-> 🚧 **Status: running.** The full pipeline is running end to end on a free Colab T4 GPU
-> ([`kaggle/colab_run.ipynb`](kaggle/colab_run.ipynb)). The results table below will be filled in from
-> `outputs/results/report.md`. See [Progress](#progress).
+> **Fine-tuned Qwen3-4B vs the same model with the same strict grounding prompt and the same retrieved passages:
+> hallucination rate 4.7% → 1.3% (72% fewer unsupported answers), strict accuracy 30.0% → 50.0%, correct refusals 100.0%, AuditKIT F1 0.709 → 0.736. Trained in 43 min on one free T4.**
+> Trade-off: over-refusal rose 6.7% → 12.2%.
 
 ## The three Lexsi Labs toolkits: where each one is used
 | Stage | Toolkit | Where in the code | What it does here |
@@ -204,26 +204,75 @@ It shows the retrieved sources and highlights the ones each answer cites. `share
 | **Free-tier engineering** | A disk cache for every LLM call, backoff that reads Groq's "try again in Xs", and per-model task split under 1000 req/day / 8000 TPM. |
 
 ## Evaluation: how "fewer hallucinations" is measured
-Test set: hand-checked, about half answerable and half not in the documents, built only from test-split chunks.
+Test set: 150 questions built only from test-split chunks: 90 answerable (CuratorKIT QA pairs) and 60 verified *not* in the documents.
 
 | Metric | Definition |
 |---|---|
-| **Hallucination rate** ↓ | % of responses with ≥1 claim not supported by the retrieved sources (judge: `gpt-oss-120b`), with a **95% bootstrap CI** |
+| **Hallucination rate** ↓ | % of responses with ≥1 claim not supported by the retrieved sources (LLM judge: local Qwen2.5-14B), with a **95% bootstrap CI** |
 | **Correct refusal** ↑ | % of unanswerable questions answered with the refusal sentence |
 | **Over-refusal** ↓ | % of answerable questions refused, also reported only where the gold passage *was* retrieved |
 | **Accuracy** ↑ | answer matches the gold answer (LLM judge) |
 | **Citation rate** ↑ | % of answers that cite a source `[S#]` |
 | **Retrieval recall** | % of answerable questions where the gold (or neighbouring) chunk was in the top 4 |
-| **AuditKIT** | `Hallucination` (claim-level, LLM judge), `lexical_groundedness`, `context_coverage`, `f1_score`, plus `ak.compare` base vs tuned |
+| **AuditKIT** | `lexical_groundedness`, `context_coverage`, `f1_score` on every answer, plus `ak.compare` base vs tuned. AuditKIT's claim-level `Hallucination` judge is supported (`07_evaluate.py` without `--no-auditkit-judge`) but was skipped in the final run to fit the free GPU session. |
 
 ### Results
-*Pending: filled in after the Kaggle run.*
+Test set: **150 questions** (90 answerable from held-out test chunks, 60 verified *not* in the documents), all from
+chunks the model never saw in training. Every system gets the **same question and the same top-4 retrieved
+passages**. Judge: local Qwen2.5-14B (different family from the Qwen3-4B being tested). Retrieval recall@4: 77.8%.
 
-| System | Hallucination ↓ | Correct refusal ↑ | Over-refusal ↓ | Accuracy ↑ |
-|---|---|---|---|---|
-| Base + RAG | – | – | – | – |
-| Base + strict prompt + RAG | – | – | – | – |
-| **Fine-tuned + RAG** | – | – | – | – |
+| Metric | Base + RAG | Base + strict prompt + RAG | **Fine-tuned + RAG (ours)** |
+|---|---|---|---|
+| Hallucination rate (≥1 unsupported claim) ↓ | 17.3% | 4.7% | 1.3% |
+| Correct refusal on unanswerable ↑ | 73.3% | 100.0% | 100.0% |
+| Made-up answer on unanswerable ↓ | 11.7% | 0.0% | 0.0% |
+| Accuracy on answerable, strict ↑ | 26.7% | 30.0% | 50.0% |
+| Accuracy on answerable, incl. partial ↑ | 95.6% | 93.3% | 87.8% |
+| Over-refusal on answerable ↓ | 3.3% | 6.7% | 12.2% |
+| Over-refusal when evidence *was* retrieved ↓ | 0.0% | 1.4% | 4.3% |
+| Answers citing a source ↑ | 6.8% | 100.0% | 97.5% |
+| Hallucination 95% bootstrap CI | [11.3%, 23.3%] | [2.0%, 8.0%] | [0.0%, 3.3%] |
+| AuditKIT lexical_groundedness ↑ | 0.850 | 0.831 | 0.821 |
+| AuditKIT context_coverage ↑ | 0.797 | 0.797 | 0.797 |
+| AuditKIT f1_score (vs gold) ↑ | 0.277 | 0.709 | 0.736 |
+
+![Results chart](docs/results_chart.png)
+
+**What the numbers say**
+- **Plain RAG is not enough.** With a simple "use the context" prompt, the base model hallucinates on 17.3% of
+  questions, refuses only 73% of out-of-corpus questions, makes up an answer for 11.7% of them, and almost never cites.
+- **Fewer hallucinations than the strong baseline.** The fair comparison is *Base + strict prompt*: same model, same
+  prompt, same passages. The only difference is our LoRA. Hallucinated answers dropped by about 70%, and the
+  confidence intervals barely overlap.
+- **More exact answers.** Strict accuracy (answer fully matches the gold answer) went from 30% to 50%. The tuned model
+  copies facts from the cited passage instead of paraphrasing loosely, which also lifts AuditKIT's F1.
+- **Refusals stay perfect.** Both strict-prompt systems refused all 60 out-of-corpus questions, with zero made-up answers.
+- **The cost is caution.** The tuned model refuses more answerable questions (over-refusal 6.7% → 12.2%). Where the
+  evidence *was* retrieved, it refuses only 4.3%, so most refusals come from retrieval misses, not the model.
+  It also gives fewer "partially correct" long answers (93% → 88% incl. partial). For compliance work, that trade
+  (say less, say only what's there) is usually the right one.
+
+### Data funnel (CuratorKIT → training set)
+| Stage | Count |
+|---|---|
+| PDF chunks (300 words, 7 documents) | 445 → 360 train / 66 test / 19 buffer |
+| Seed chunks sent to CuratorKIT | 260 (200 train + 60 test) |
+| QA pairs generated (`QAGenerationTask`, 3 per chunk) | 767 |
+| Passed CuratorKIT `HallucinationGate` (threshold 0.7) | **757** (10 rejected) |
+| After dropping non-self-contained questions ("the passage…") | 718 |
+| "Not in the documents" candidates → verified against retrieval | 246 → **150** (75 missing detail, 42 out of scope, 33 false premise) |
+| **SFT training examples** | **741** train + 38 validation: 552 grounded answers with citations, 157 hard negatives (same question, evidence removed → refusal), 70 unanswerable → refusal (29% refusals) |
+
+### Training (AlignTune)
+`aligntune.create_sft_trainer` with the Unsloth backend: Qwen3-4B-Instruct-2507, 4-bit, LoRA r=16/α=32 on all
+attention and MLP projections (33M trainable params, 0.81%), 1 epoch, 47 steps, effective batch 16, lr 2e-4,
+gradient checkpointing, max length 2560. **43 minutes on a free Colab T4.** Logged loss 2.15 → 1.59 (run average 1.76).
+The loss covers the whole prompt, including the 4 source passages.
+
+**Known issue, fixed at decoding.** The adapter learned to start answers with a stray `assistant` role header, and
+21/150 answers stopped immediately. `common/model.py` now strips the header and blocks end-of-turn on the first
+token. `scripts/06b_fix_empty.py` regenerated the 21 empties (1 stayed empty and is scored as a miss). The raw
+outputs are kept for transparency.
 
 ## Tech stack
 | Area | Tools |
@@ -290,19 +339,15 @@ python app.py        # prints a public gradio.live link
 ```
 
 ## Progress
-- [x] Corpus chosen and downloaded (7 official documents)
-- [x] Ingestion and leakage-safe split (445 chunks)
-- [x] Full pipeline code: curation, unanswerables, set building, training, generation, evaluation, demo
-- [x] CuratorKIT smoke run (36/36 QA pairs passed the hallucination gate)
-- [x] Leakage test (no test chunk appears in any training context)
-- [x] QA generation for 183 of 260 chunks with Groq gpt-oss-120b (~550 pairs, cached in `data/work/llm_cache.jsonl`)
-- [x] Moved the GPU and LLM work to Colab with a local Qwen2.5-14B (see *Engineering notes* below)
-- [ ] Full **CuratorKIT** curation run of 260 chunks: generation → hallucination gate → dedup *(running on Colab)*
-- [ ] Verified unanswerable questions
-- [ ] SFT set + test set (LLM-verified; hand spot-check if time allows)
-- [ ] Fine-tuning with **AlignTune**
-- [ ] Evaluation with **AuditKIT** + results table
-- [ ] Publish adapter and dataset on Hugging Face
+- [x] Corpus chosen and downloaded (7 official documents, 445 chunks, leakage-safe split)
+- [x] **CuratorKIT** curation: 260 chunks → 767 QA pairs → 757 passed the hallucination gate
+- [x] 150 verified "not in the documents" questions
+- [x] SFT set (741 examples, 29% refusals) + 150-question test set
+- [x] Fine-tuning with **AlignTune** (Unsloth, LoRA, 43 min on a free T4)
+- [x] Evaluation of 3 systems (grounding judge + **AuditKIT**): results table and chart above
+- [ ] Hand spot-check of the test set (the unanswerables were LLM-verified against retrieval)
+- [ ] Publish the LoRA adapter on Hugging Face (`outputs/adapter`, saved from the Colab run)
+- [ ] Second epoch / assistant-only loss to reduce over-refusal
 
 ## Engineering notes: what broke and how it was fixed
 | Problem | Fix |
@@ -311,11 +356,16 @@ python app.py        # prints a public gradio.live link
 | `qwen3.8-27b` on Groq also caps output at 1,000 tokens/min. | That model was used only for short outputs (the gate), not generation. |
 | The laptop (16 GB RAM) ran out of memory, and Claude Code stopped background jobs that used PyTorch alongside a browser. | Everything heavy moved to a GPU notebook, where the full **CuratorKIT** run has room to finish. |
 | Kaggle GPU needs phone verification, which didn't sync in time. | The same notebook runs on **Google Colab** (free T4). It clones this repo, so nothing is uploaded by hand. |
+| AlignTune's SFT default has gradient checkpointing off, so the first training run hit CUDA OOM on the 16 GB T4. | `gradient_checkpointing=True`, batch 1 × 16 accumulation, max length 2560. |
+| The fine-tuned model emitted a stray `assistant` header and 21/150 empty answers. | Decoding strips the header and blocks end-of-turn on the first token. `06b_fix_empty.py` regenerated the empties (raw outputs kept). |
 | A stalled HTTP connection froze the run for 30+ minutes. | Every LLM call has a timeout (`LLM_TIMEOUT`) plus retries with backoff that reads Groq's "try again in Xs". |
 | Windows console crashed on Unicode (cp1252). | stdout/stderr are reconfigured to UTF-8 in `config.py`. |
 
 ## Limitations
-- The judge is an LLM (a different family from the generator). The test set was hand-checked, but not every judge verdict.
+- The judge is an LLM (Qwen2.5-14B, a different family from the Qwen3-4B being tested). Verdicts were not hand-audited.
+- The test set is LLM-built and LLM-verified, not hand-checked. 150 questions give wide-ish CIs (see table).
+- Trained for 1 epoch to fit the free GPU session. The fine-tuned model over-refuses more than the baseline (12.2% vs 6.7%).
+- Generation and training used different model families on purpose; QA pairs for 260 of 445 chunks only.
 - Retrieval recall caps answerable accuracy, so it is reported separately.
 - The documents are a snapshot. Standards are revised often (VCS v5 is from Dec 2025).
 - The India CCTS gazette is a third-party mirror of the official notification, English part only.
