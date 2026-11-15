@@ -15,6 +15,7 @@ hallucination among answered, citation precision/recall. Paired McNemar test + p
 Writes outputs/results/{metrics.json, report.md, chart.png, judged_<system>.jsonl}
 """
 import argparse
+import os
 import json
 import math
 import random
@@ -29,7 +30,8 @@ from config import AUDIT_JUDGE, JUDGE_MODEL, OUT, TOP_K  # noqa: E402
 
 LABELS = {"base_rag": "Base + simple prompt", "base_strict": "Base + grounding prompt",
           "tuned_sft": "Ours: SFT", "tuned_dpo": "Ours: SFT + DPO"}
-RES = OUT / "results"
+RES = Path(os.getenv("RESULTS_DIR", OUT / "results"))
+PREDS = Path(os.getenv("PREDS_DIR", OUT / "preds"))
 
 JUDGE_PROMPT = """You grade a question-answering assistant that must answer ONLY from the given sources.
 
@@ -250,7 +252,7 @@ def main():
     args = ap.parse_args()
     RES.mkdir(parents=True, exist_ok=True)
 
-    preds = {s: read_jsonl(OUT / "preds" / f"{s}.jsonl") for s in LABELS if (OUT / "preds" / f"{s}.jsonl").exists()}
+    preds = {s: read_jsonl(PREDS / f"{s}.jsonl") for s in LABELS if (PREDS / f"{s}.jsonl").exists()}
     for e in args.extra:
         path, label = e.rsplit(":", 1)
         preds[label] = read_jsonl(path)

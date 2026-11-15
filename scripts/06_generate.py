@@ -58,8 +58,8 @@ def main():
     ans = [r for r in rows if r["type"] == "answerable"]
     print(f"Retrieval recall@{TOP_K}: {sum(r['retrieval_hit'] for r in ans) / max(len(ans), 1):.1%}")
 
-    pred_dir = OUT / "preds"
-    pred_dir.mkdir(exist_ok=True)
+    pred_dir = Path(os.getenv("PREDS_DIR", OUT / "preds"))
+    pred_dir.mkdir(parents=True, exist_ok=True)
     todo = [s for s in args.systems.split(",") if args.force or not (pred_dir / f"{s}.jsonl").exists()]
     print("to generate:", todo or "nothing (all done)")
     for group in ("base", "merged"):
