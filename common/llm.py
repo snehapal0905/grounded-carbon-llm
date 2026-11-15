@@ -42,7 +42,8 @@ def chat(model, messages, temperature=0.0, max_tokens=900, retries=8):
         try:
             extra = {"reasoning_effort": "low"} if "gpt-oss" in model else {}
             r = litellm.completion(model=model, messages=messages,
-                                   temperature=temperature, max_tokens=max_tokens, **extra)
+                                   temperature=temperature, max_tokens=max_tokens,
+                                   timeout=120, **extra)  # never hang forever on a dead socket
             text = r.choices[0].message.content or ""
             break
         except Exception as e:  # rate limits / transient errors
