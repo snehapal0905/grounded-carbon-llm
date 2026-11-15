@@ -102,7 +102,7 @@ download them into `data/raw/`.
    │                                • positives: question + 4 sources → answer with [S#]
    │                                • hard negatives: SAME question, evidence removed → refusal
    │                                • unanswerables → refusal
-   │                              + test_candidates.csv (hand-checked by a human)
+   │                              + test_candidates.csv (keep=0 column for optional hand review)
    │
    ▼ 05_train (AlignTune) ──────► LoRA SFT on Qwen3-4B (Unsloth, 4-bit, T4 GPU on Kaggle)
    │
@@ -161,7 +161,7 @@ Every training example looks exactly like inference: **system prompt + 4 retriev
 - Only **train-split** chunks are ever used as training context (verified by a leakage test).
 - A regex drops leftover "the passage / this section" questions.
 - Outputs: `outputs/sft/train.jsonl`, `outputs/sft/validation.jsonl` (AlignTune-ready `messages`
-  format) and **`outputs/test_candidates.csv`**, which a human checks row by row (`keep=0` to drop).
+  format) and **`outputs/test_candidates.csv`**, with a `keep` column for optional hand review (`keep=0` drops a row).
 
 ### `scripts/05_train.py`: AlignTune fine-tuning
 - `aligntune.create_sft_trainer` on `unsloth/Qwen3-4B-Instruct-2507`
@@ -365,7 +365,7 @@ python app.py        # prints a public gradio.live link
 - The judge is an LLM (Qwen2.5-14B, a different family from the Qwen3-4B being tested). Verdicts were not hand-audited.
 - The test set is LLM-built and LLM-verified, not hand-checked. 150 questions give wide-ish CIs (see table).
 - Trained for 1 epoch to fit the free GPU session. The fine-tuned model over-refuses more than the baseline (12.2% vs 6.7%).
-- Generation and training used different model families on purpose; QA pairs for 260 of 445 chunks only.
+- QA pairs were generated from 260 of the 445 chunks only, to fit the compute budget.
 - Retrieval recall caps answerable accuracy, so it is reported separately.
 - The documents are a snapshot. Standards are revised often (VCS v5 is from Dec 2025).
 - The India CCTS gazette is a third-party mirror of the official notification, English part only.
