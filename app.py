@@ -8,14 +8,19 @@ import re
 
 import gradio as gr
 
+import os
+from pathlib import Path
+
 from common.model import Generator
-from common.prompts import REFUSAL, SYSTEM_STRICT, build_messages, cited_ids
+from common.prompts import REFUSAL, SYSTEM_QUOTE, build_messages, cited_ids, final_answer
 from common.retrieval import Index, load_chunks
-from config import OUT, TOP_K
+from config import BASE_MODEL, OUT, TOP_K
 
 chunks = load_chunks()
 index = Index(chunks)
-gen = Generator()
+# v2: base model and final (merged SFT + DPO adapter) model, both 4-bit so two fit on one T4
+base_gen = Generator(BASE_MODEL, None, load_in_4bit=True)
+tuned_gen = Generator(Path(os.getenv("MERGED_DIR", "/content/merged_sft")), OUT / "adapter_dpo", load_in_4bit=True)
 
 examples = []
 try:
@@ -29,9 +34,9 @@ except FileNotFoundError:
 
 
 def render_answer(text):
-    if text.strip().startswith(REFUSAL):
+    if final_answer(text).strip().startswith(REFUSAL):
         return f"<div class='ans refusal'>🛑 {html.escape(text)}</div>"
-    body = re.sub(r"\[S(\d+)\]", r"<span class='cite'>[S\1]</span>", html.escape(text))
+    body = re.sub(r"\[S(\d+)\]", r"<span class='cite'>[S\1]</span>", html.escape(text)).replace("\n", "<br>")
     return f"<div class='ans'>{body}</div>"
 
 
@@ -48,9 +53,9 @@ def ask(question):
     if not question.strip():
         return "", "", ""
     ctx = index.search(question, k=TOP_K)
-    msgs = build_messages(question, ctx, system=SYSTEM_STRICT)
-    base = gen.generate([msgs], tuned=False)[0]
-    tuned = gen.generate([msgs], tuned=True)[0]
+    msgs = build_messages(question, ctx, system=SYSTEM_QUOTE)
+    base = base_gen.generate([msgs], tuned=False)[0]
+    tuned = tuned_gen.generate([msgs], tuned=True)[0]
     return render_answer(base), render_answer(tuned), render_sources(ctx, set(cited_ids(tuned)))
 
 
@@ -69,10 +74,10 @@ with gr.Blocks(css=CSS, title="Grounded Carbon-Market QA") as demo:
     btn = gr.Button("Ask", variant="primary")
     with gr.Row():
         with gr.Column():
-            gr.Markdown("### Base model (strict prompt + RAG)")
+            gr.Markdown("### Base model (same grounding prompt)")
             a_base = gr.HTML()
         with gr.Column():
-            gr.Markdown("### Fine-tuned model (ours)")
+            gr.Markdown("### Fine-tuned model (ours: SFT + DPO)")
             a_tuned = gr.HTML()
     gr.Markdown("### Retrieved sources (green = cited by the fine-tuned model)")
     srcs = gr.HTML()
