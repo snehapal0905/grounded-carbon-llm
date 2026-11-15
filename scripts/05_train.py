@@ -40,6 +40,8 @@ def train_aligntune(args, train_file, run_dir):
         quantization={"load_in_4bit": True},
         fp16=True, bf16=False,                       # T4/P100 have no bf16
         warmup_ratio=0.05,
+        gradient_checkpointing=True,                 # AlignTune's SFT default is off -> OOM on a 16 GB T4
+        use_gradient_checkpointing=True,
         load_best_model_at_end=False,
         save_steps=100,
         report_to="none",
@@ -82,14 +84,15 @@ def main():
     ap.add_argument("--engine", choices=["aligntune", "trl"], default="aligntune")
     ap.add_argument("--backend", choices=["unsloth", "trl"], default="unsloth")
     ap.add_argument("--epochs", type=int, default=2)
-    ap.add_argument("--batch-size", type=int, default=2)
-    ap.add_argument("--grad-accum", type=int, default=8)
+    ap.add_argument("--batch-size", type=int, default=1)
+    ap.add_argument("--grad-accum", type=int, default=16)
     ap.add_argument("--lr", type=float, default=2e-4)
-    ap.add_argument("--max-seq-len", type=int, default=3072)
+    ap.add_argument("--max-seq-len", type=int, default=2560)  # 4 x 300-word sources ~ 2k tokens
     ap.add_argument("--max-samples", type=int, default=None, help="e.g. 40 for a 5-minute smoke test")
     args = ap.parse_args()
 
     os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")  # Unsloth trains on one GPU
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     train_file = OUT / "sft" / "train.jsonl"
     run_dir = OUT / "run"
     (train_aligntune if args.engine == "aligntune" else train_trl)(args, train_file, run_dir)
