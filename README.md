@@ -10,7 +10,8 @@
 organisation's own documents, train a model that answers only from them, says so when the answer is
 missing, and makes measurably fewer unsupported claims.
 
-> 🚧 **Status: work in progress.** The data pipeline is running. Training and evaluation on Kaggle are next.
+> 🚧 **Status: work in progress.** QA generation is ~70% done (183/260 chunks, Groq). The rest of the pipeline
+> (gate → unanswerables → SFT set → training → evaluation) is set up as one Kaggle notebook and starts next.
 > The results table below will be filled in from `outputs/results/report.md`. See [Progress](#progress).
 
 ---
@@ -224,10 +225,10 @@ Test set: hand-checked, about half answerable and half not in the documents, bui
 | Fine-tuning | **AlignTune** (SFT + LoRA), Unsloth, TRL, PEFT, bitsandbytes (4-bit) |
 | Evaluation | **AuditKIT** (hallucination, groundedness, coverage, F1), custom judge + bootstrap CIs |
 | Base model | `Qwen/Qwen3-4B-Instruct-2507` |
-| LLM APIs | Groq via LiteLLM: `openai/gpt-oss-120b` (generator + judge), `openai/gpt-oss-20b` (unanswerables), `qwen/qwen3.8-27b` (gate) |
+| LLMs for data + judging | Groq via LiteLLM: `openai/gpt-oss-120b` wrote the first 183 chunks' QA pairs. Everything after that runs on **Qwen2.5-14B served by Ollama on the Kaggle GPU** (same LiteLLM code, swapped with env vars) |
 | Retrieval | `BAAI/bge-small-en-v1.5` (sentence-transformers) + `rank_bm25`, RRF fusion |
 | PDF parsing | `pypdf` |
-| Compute | Laptop CPU for data; **Kaggle T4 GPU** for training and inference |
+| Compute | Laptop CPU for ingestion; **Kaggle T4 x2 GPU** for the rest of the data steps, training, inference and judging |
 | Demo | Gradio |
 
 ## Repository layout
@@ -286,14 +287,23 @@ python app.py        # prints a public gradio.live link
 - [x] Full pipeline code: curation, unanswerables, set building, training, generation, evaluation, demo
 - [x] CuratorKIT smoke run (36/36 QA pairs passed the hallucination gate)
 - [x] Leakage test (no test chunk appears in any training context)
-- [ ] Full curation of 260 chunks *(running: QA generation ~60% done)*. CuratorKIT was verified on the
-  smoke run. Because of laptop memory limits, the full run uses `--engine fallback`, which has the same
-  generate → hallucination gate → dedup stages and caches every LLM call to disk, so a crash loses nothing.
+- [x] QA generation for 183 of 260 chunks with Groq gpt-oss-120b (~550 pairs, cached in `data/work/llm_cache.jsonl`)
+- [x] Moved the remaining LLM work to Kaggle (see *Engineering notes* below)
+- [ ] QA generation for the last 77 chunks + hallucination gate *(Kaggle, local Qwen2.5-14B)*
 - [ ] Verified unanswerable questions
-- [ ] SFT set + hand-checked test set
+- [ ] SFT set + test set (LLM-verified; hand spot-check if time allows)
 - [ ] Fine-tuning on Kaggle
 - [ ] Evaluation and results table
 - [ ] Publish adapter and dataset on Hugging Face
+
+## Engineering notes: what broke and how it was fixed
+| Problem | Fix |
+|---|---|
+| Groq free tier: 8,000 tokens/min and **200,000 tokens/day per model**. The full pipeline needs about 2M tokens. | Every LLM call is cached on disk. The remaining work moved to a local **Qwen2.5-14B on Kaggle (Ollama)** via the same LiteLLM interface. `CACHE_FALLBACK_MODELS` reuses answers already produced by Groq, so nothing is generated twice. |
+| `qwen3.8-27b` on Groq also caps output at 1,000 tokens/min. | That model was used only for short outputs (the gate), not generation. |
+| The laptop (16 GB RAM) ran out of memory, and Claude Code stopped background jobs that used PyTorch alongside a browser. | Steps run one at a time. The CuratorKIT path (no partial saves) was swapped for the cached fallback path with the same stages. Heavy work moved to Kaggle. |
+| A stalled HTTP connection froze the run for 30+ minutes. | Every LLM call has a timeout (`LLM_TIMEOUT`) plus retries with backoff that reads Groq's "try again in Xs". |
+| Windows console crashed on Unicode (cp1252). | stdout/stderr are reconfigured to UTF-8 in `config.py`. |
 
 ## Limitations
 - The judge is an LLM (a different family from the generator). The test set was hand-checked, but not every judge verdict.
