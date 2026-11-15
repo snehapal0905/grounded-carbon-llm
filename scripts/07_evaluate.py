@@ -194,7 +194,7 @@ def main():
         lines.append(f"| {label} | " + " | ".join(pct(all_m[s][k]) for s in all_m) + " |")
     any_m = next(iter(all_m.values()))
     lines.append(f"\nTest set: {any_m['n_answerable']} answerable + {any_m['n_unanswerable']} unanswerable "
-                 f"questions (hand-checked). Retrieval recall@{TOP_K}: {pct(any_m['retrieval_recall_at_k'])}. "
+                 f"questions (unanswerables verified against retrieval by an LLM; test chunks never seen in training). Retrieval recall@{TOP_K}: {pct(any_m['retrieval_recall_at_k'])}. "
                  f"Judge: {JUDGE_MODEL}.")
     for s, m in all_m.items():
         lo, hi = m["hallucination_rate_ci95"]
