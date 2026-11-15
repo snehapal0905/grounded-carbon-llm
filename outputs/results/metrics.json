@@ -1,0 +1,80 @@
+{
+  "base_rag": {
+    "n_answerable": 90,
+    "n_unanswerable": 60,
+    "hallucination_rate": 0.17333333333333334,
+    "hallucination_rate_ci95": [
+      0.11333333333333333,
+      0.23333333333333334
+    ],
+    "correct_refusal_rate": 0.7333333333333333,
+    "correct_refusal_ci95": [
+      0.6333333333333333,
+      0.85
+    ],
+    "unanswerable_hallucinated": 0.11666666666666667,
+    "accuracy": 0.26666666666666666,
+    "accuracy_incl_partial": 0.9555555555555556,
+    "over_refusal_rate": 0.03333333333333333,
+    "over_refusal_when_evidence_retrieved": 0.0,
+    "citation_rate": 0.06796116504854369,
+    "retrieval_recall_at_k": 0.7777777777777778,
+    "auditkit": {
+      "lexical_groundedness": 0.8504499110271315,
+      "context_coverage": 0.7968830870337003,
+      "f1_score": 0.27670585509209256
+    }
+  },
+  "base_strict": {
+    "n_answerable": 90,
+    "n_unanswerable": 60,
+    "hallucination_rate": 0.04666666666666667,
+    "hallucination_rate_ci95": [
+      0.02,
+      0.08
+    ],
+    "correct_refusal_rate": 1.0,
+    "correct_refusal_ci95": [
+      1.0,
+      1.0
+    ],
+    "unanswerable_hallucinated": 0.0,
+    "accuracy": 0.3,
+    "accuracy_incl_partial": 0.9333333333333333,
+    "over_refusal_rate": 0.06666666666666667,
+    "over_refusal_when_evidence_retrieved": 0.014285714285714285,
+    "citation_rate": 1.0,
+    "retrieval_recall_at_k": 0.7777777777777778,
+    "auditkit": {
+      "lexical_groundedness": 0.8305197388115955,
+      "context_coverage": 0.7968830870337003,
+      "f1_score": 0.7085478798831096
+    }
+  },
+  "tuned_rag": {
+    "n_answerable": 90,
+    "n_unanswerable": 60,
+    "hallucination_rate": 0.013333333333333334,
+    "hallucination_rate_ci95": [
+      0.0,
+      0.03333333333333333
+    ],
+    "correct_refusal_rate": 1.0,
+    "correct_refusal_ci95": [
+      1.0,
+      1.0
+    ],
+    "unanswerable_hallucinated": 0.0,
+    "accuracy": 0.5,
+    "accuracy_incl_partial": 0.8777777777777778,
+    "over_refusal_rate": 0.12222222222222222,
+    "over_refusal_when_evidence_retrieved": 0.04285714285714286,
+    "citation_rate": 0.9746835443037974,
+    "retrieval_recall_at_k": 0.7777777777777778,
+    "auditkit": {
+      "lexical_groundedness": 0.8210939841968792,
+      "context_coverage": 0.7968830870337003,
+      "f1_score": 0.7354719079380152
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "candidates": 246,
+  "verified_no": 150,
+  "test": 60,
+  "train": 70,
+  "kinds": {
+    "missing_detail": 75,
+    "out_of_scope": 42,
+    "false_premise": 33
+  }
+}

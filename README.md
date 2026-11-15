@@ -246,11 +246,17 @@ passages**. Judge: local Qwen2.5-14B (different family from the Qwen3-4B being t
   confidence intervals barely overlap.
 - **More exact answers.** Strict accuracy (answer fully matches the gold answer) went from 30% to 50%. The tuned model
   copies facts from the cited passage instead of paraphrasing loosely, which also lifts AuditKIT's F1.
+- **AuditKIT agrees.** `ak.compare` (strict baseline → fine-tuned): F1 vs gold 0.709 → 0.736 (+3.8%), with
+  **13 answers going wrong → right and 1 going right → wrong**. Lexical groundedness stays about the same (0.831 → 0.821).
 - **Refusals stay perfect.** Both strict-prompt systems refused all 60 out-of-corpus questions, with zero made-up answers.
 - **The cost is caution.** The tuned model refuses more answerable questions (over-refusal 6.7% → 12.2%). Where the
   evidence *was* retrieved, it refuses only 4.3%, so most refusals come from retrieval misses, not the model.
   It also gives fewer "partially correct" long answers (93% → 88% incl. partial). For compliance work, that trade
   (say less, say only what's there) is usually the right one.
+
+All raw outputs are in the repo: [`outputs/results/`](outputs/results) (judged answers, `metrics.json`,
+`report.md`, `auditkit_compare.txt`), [`outputs/preds/`](outputs/preds) (every answer, plus `tuned_rag.raw.jsonl`),
+[`outputs/sft/`](outputs/sft) (the training set) and [`outputs/test_candidates.csv`](outputs/test_candidates.csv).
 
 ### Data funnel (CuratorKIT → training set)
 | Stage | Count |

@@ -1,0 +1,7 @@
+Comparison: 30a3660945052daf (baseline) -> b9c36e4d8484a97f (candidate)
+  per-metric (baseline -> candidate | absolute delta | relative %):
+    context_coverage: 0.7969 -> 0.7969  delta=+0.0000 (+0.0% rel)  (n=150->150, std=0.1447->0.1447)
+    f1_score: 0.7085 -> 0.7355  delta=+0.0269 (+3.8% rel)  (n=150->150, std=0.2959->0.3095)
+    lexical_groundedness: 0.8305 -> 0.8211  delta=-0.0094 (-1.1% rel)  (n=150->150, std=0.1493->0.1850)
+  samples: 1 went correct->wrong, 13 went wrong->correct
+  model: precomputed -> precomputed (no measurable size)

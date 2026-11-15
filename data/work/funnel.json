@@ -1,0 +1,51 @@
+{
+  "engine": "curatorkit",
+  "seed_chunks": 260,
+  "stage_counts": {
+    "JSONLReader": {
+      "output_count": 260,
+      "rejected_count": 0
+    },
+    "SchemaGate": {
+      "input_count": 260,
+      "output_count": 260,
+      "probe_recovered": 0,
+      "rejected_count": 0
+    },
+    "ExactDeduplicator": {
+      "input_count": 260,
+      "output_count": 260
+    },
+    "MinHashDeduplicator": {
+      "input_count": 260,
+      "output_count": 260
+    },
+    "TextCleaner": {
+      "input_count": 260,
+      "output_count": 260
+    },
+    "QAGenerationTask": {
+      "input_count": 260,
+      "output_count": 767,
+      "rejected_count": 0
+    },
+    "HallucinationGate": {
+      "input_count": 767,
+      "output_count": 757,
+      "probe_recovered": 0,
+      "rejected_count": 10
+    },
+    "AlpacaExporter": {
+      "exported_count": 757
+    }
+  },
+  "rejected_by_step": {
+    "HallucinationGate": 10
+  },
+  "passed": 757,
+  "mapped_by_embedding": 0,
+  "by_split": {
+    "train": 581,
+    "test": 176
+  }
+}
