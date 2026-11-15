@@ -10,9 +10,16 @@
 organisation's own documents, train a model that answers only from them, says so when the answer is
 missing, and makes measurably fewer unsupported claims.
 
-> 🚧 **Status: work in progress.** QA generation is ~70% done (183/260 chunks, Groq). The rest of the pipeline
-> (gate → unanswerables → SFT set → training → evaluation) is set up as one Kaggle notebook and starts next.
-> The results table below will be filled in from `outputs/results/report.md`. See [Progress](#progress).
+> 🚧 **Status: running.** The full pipeline is running end to end on a free Colab T4 GPU
+> ([`kaggle/colab_run.ipynb`](kaggle/colab_run.ipynb)). The results table below will be filled in from
+> `outputs/results/report.md`. See [Progress](#progress).
+
+## The three Lexsi Labs toolkits: where each one is used
+| Stage | Toolkit | Where in the code | What it does here |
+|---|---|---|---|
+| **Build the data** | **CuratorKIT** | [`scripts/02_curate.py`](scripts/02_curate.py), `run_curatorkit()` | `Curator(CuratorConfig(...)).run()`: schema gate → exact + **MinHash dedup** → text cleaning → **QA generation** (3 per chunk) → **HallucinationGate** (judge model, threshold 0.7) → Alpaca export. Its `stage_counts` give the data funnel. |
+| **Train** | **AlignTune** | [`scripts/05_train.py`](scripts/05_train.py) | `aligntune.create_sft_trainer(...)`: SFT with **LoRA** (r=16, α=32) on Qwen3-4B-Instruct, 4-bit, Unsloth backend, chat-template `messages` data. |
+| **Evaluate** | **AuditKIT** | [`scripts/07_evaluate.py`](scripts/07_evaluate.py) | `ak.evaluate(...)` with `Hallucination` (LLM judge), `lexical_groundedness`, `context_coverage`, `f1_score` on base vs fine-tuned answers, then `ak.compare(...)`. |
 
 ---
 
@@ -126,7 +133,7 @@ download them into `data/raw/`.
 - Maps every QA pair back to its source chunk (normalised text match, falling back to embedding
   nearest-neighbour) so it inherits the chunk's train/test split.
 - Saves the **data funnel** (how many samples survived each stage) to `data/work/funnel.json`.
-- `--engine fallback` runs the same idea with plain Groq calls if CuratorKIT is unavailable.
+- `--engine fallback` is an emergency path with plain LLM calls and the same stages. **The submitted run uses CuratorKIT.**
 
 Sample pairs from the CuratorKIT smoke run (12 chunks → 36 pairs, 36/36 passed the gate):
 
@@ -225,10 +232,10 @@ Test set: hand-checked, about half answerable and half not in the documents, bui
 | Fine-tuning | **AlignTune** (SFT + LoRA), Unsloth, TRL, PEFT, bitsandbytes (4-bit) |
 | Evaluation | **AuditKIT** (hallucination, groundedness, coverage, F1), custom judge + bootstrap CIs |
 | Base model | `Qwen/Qwen3-4B-Instruct-2507` |
-| LLMs for data + judging | Groq via LiteLLM: `openai/gpt-oss-120b` wrote the first 183 chunks' QA pairs. Everything after that runs on **Qwen2.5-14B served by Ollama on the Kaggle GPU** (same LiteLLM code, swapped with env vars) |
+| LLMs for data + judging | **Qwen2.5-14B served by Ollama on the GPU**, called through LiteLLM by CuratorKIT, our scripts and AuditKIT. Groq `gpt-oss-120b` was used for the laptop runs until its free daily limit ran out. |
 | Retrieval | `BAAI/bge-small-en-v1.5` (sentence-transformers) + `rank_bm25`, RRF fusion |
 | PDF parsing | `pypdf` |
-| Compute | Laptop CPU for ingestion; **Kaggle T4 x2 GPU** for the rest of the data steps, training, inference and judging |
+| Compute | Laptop CPU for ingestion; **free Colab T4 GPU** (or Kaggle) for curation, training, inference and judging |
 | Demo | Gradio |
 
 ## Repository layout
@@ -241,7 +248,8 @@ common/
   model.py              loads base + LoRA adapter, batched greedy generation, adapter on/off
 scripts/
   01_ingest.py … 07_evaluate.py   the pipeline (see above)
-kaggle/train_eval.ipynb  one-click Kaggle notebook: smoke test → train → generate → evaluate → demo
+kaggle/colab_run.ipynb   one-click Colab notebook: CuratorKIT data → AlignTune training → generate → AuditKIT eval → demo
+kaggle/train_eval.ipynb  the same pipeline for Kaggle
 app.py                  Gradio side-by-side demo
 docs/SOURCES.md         exact document versions and links
 requirements.txt
@@ -262,7 +270,7 @@ Download the 7 PDFs listed in [`docs/SOURCES.md`](docs/SOURCES.md) into `data/ra
 ### 1–4. Build the data (CPU is fine, about 3 h on the Groq free tier)
 ```bash
 python scripts/01_ingest.py
-python scripts/02_curate.py          # add --engine fallback if CuratorKIT fails
+python scripts/02_curate.py          # CuratorKIT
 python scripts/03_unanswerable.py
 python scripts/04_build_sets.py
 ```
@@ -288,12 +296,12 @@ python app.py        # prints a public gradio.live link
 - [x] CuratorKIT smoke run (36/36 QA pairs passed the hallucination gate)
 - [x] Leakage test (no test chunk appears in any training context)
 - [x] QA generation for 183 of 260 chunks with Groq gpt-oss-120b (~550 pairs, cached in `data/work/llm_cache.jsonl`)
-- [x] Moved the remaining LLM work to Kaggle (see *Engineering notes* below)
-- [ ] QA generation for the last 77 chunks + hallucination gate *(Kaggle, local Qwen2.5-14B)*
+- [x] Moved the GPU and LLM work to Colab with a local Qwen2.5-14B (see *Engineering notes* below)
+- [ ] Full **CuratorKIT** curation run of 260 chunks: generation → hallucination gate → dedup *(running on Colab)*
 - [ ] Verified unanswerable questions
 - [ ] SFT set + test set (LLM-verified; hand spot-check if time allows)
-- [ ] Fine-tuning on Kaggle
-- [ ] Evaluation and results table
+- [ ] Fine-tuning with **AlignTune**
+- [ ] Evaluation with **AuditKIT** + results table
 - [ ] Publish adapter and dataset on Hugging Face
 
 ## Engineering notes: what broke and how it was fixed
@@ -301,7 +309,8 @@ python app.py        # prints a public gradio.live link
 |---|---|
 | Groq free tier: 8,000 tokens/min and **200,000 tokens/day per model**. The full pipeline needs about 2M tokens. | Every LLM call is cached on disk. The remaining work moved to a local **Qwen2.5-14B on Kaggle (Ollama)** via the same LiteLLM interface. `CACHE_FALLBACK_MODELS` reuses answers already produced by Groq, so nothing is generated twice. |
 | `qwen3.8-27b` on Groq also caps output at 1,000 tokens/min. | That model was used only for short outputs (the gate), not generation. |
-| The laptop (16 GB RAM) ran out of memory, and Claude Code stopped background jobs that used PyTorch alongside a browser. | Steps run one at a time. The CuratorKIT path (no partial saves) was swapped for the cached fallback path with the same stages. Heavy work moved to Kaggle. |
+| The laptop (16 GB RAM) ran out of memory, and Claude Code stopped background jobs that used PyTorch alongside a browser. | Everything heavy moved to a GPU notebook, where the full **CuratorKIT** run has room to finish. |
+| Kaggle GPU needs phone verification, which didn't sync in time. | The same notebook runs on **Google Colab** (free T4). It clones this repo, so nothing is uploaded by hand. |
 | A stalled HTTP connection froze the run for 30+ minutes. | Every LLM call has a timeout (`LLM_TIMEOUT`) plus retries with backoff that reads Groq's "try again in Xs". |
 | Windows console crashed on Unicode (cp1252). | stdout/stderr are reconfigured to UTF-8 in `config.py`. |
 
