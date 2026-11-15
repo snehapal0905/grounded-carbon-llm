@@ -286,7 +286,9 @@ python app.py        # prints a public gradio.live link
 - [x] Full pipeline code: curation, unanswerables, set building, training, generation, evaluation, demo
 - [x] CuratorKIT smoke run (36/36 QA pairs passed the hallucination gate)
 - [x] Leakage test (no test chunk appears in any training context)
-- [ ] Full CuratorKIT curation (260 chunks) *(running)*
+- [ ] Full curation of 260 chunks *(running: QA generation ~60% done)*. CuratorKIT was verified on the
+  smoke run. Because of laptop memory limits, the full run uses `--engine fallback`, which has the same
+  generate → hallucination gate → dedup stages and caches every LLM call to disk, so a crash loses nothing.
 - [ ] Verified unanswerable questions
 - [ ] SFT set + hand-checked test set
 - [ ] Fine-tuning on Kaggle
