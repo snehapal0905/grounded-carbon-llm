@@ -86,6 +86,11 @@ if [ "${STOP_AFTER:-}" = "sft" ]; then rm -rf "$O/run_sft" "$O/smoke"; log "STOP
 if [ ! -f "$O/preds/tuned_dpo.jsonl" ] && [ ! -f "$MERGED_DIR/config.json" ]; then
   log "merge"; python scripts/05_train.py --stage merge
 fi
+# adapters saved before the 'ref' fix have no SOURCE file and may be TRL's untrained reference copy: redo DPO
+if [ -f "$O/adapter_dpo/adapter_config.json" ] && [ ! -f "$O/adapter_dpo/SOURCE" ]; then
+  log "discarding old adapter_dpo (it was TRL's untrained 'ref' copy) - DPO runs again"
+  rm -rf "$O/adapter_dpo" "$O/preds/tuned_dpo.jsonl"
+fi
 [ -f "$O/adapter_dpo/adapter_config.json" ] || { log "DPO"; python scripts/05_train.py --stage dpo; }
 rm -rf "$O/run_sft" "$O/run_dpo" "$O/smoke"   # checkpoints no longer needed once adapters exist
 if [ "${STOP_AFTER:-}" = "train" ]; then log "STOP_AFTER=train: adapters saved in $O"; exit 0; fi
