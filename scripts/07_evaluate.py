@@ -29,7 +29,8 @@ from common.prompts import REFUSAL, cited_ids, final_answer, is_refusal, quote_i
 from config import AUDIT_JUDGE, JUDGE_MODEL, OUT, TOP_K  # noqa: E402
 
 LABELS = {"base_rag": "Base + simple prompt", "base_strict": "Base + grounding prompt",
-          "tuned_sft": "Ours: SFT", "tuned_dpo": "Ours: SFT + DPO"}
+          "tuned_sft": "Ours: SFT", "tuned_dpo": "Ours: SFT + DPO",
+          "main_tuned": "Main pipeline: fine-tuned"}
 RES = Path(os.getenv("RESULTS_DIR", OUT / "results"))
 PREDS = Path(os.getenv("PREDS_DIR", OUT / "preds"))
 
@@ -256,7 +257,7 @@ def main():
     for e in args.extra:
         path, label = e.rsplit(":", 1)
         preds[label] = read_jsonl(path)
-        LABELS[label] = label
+        LABELS[label] = LABELS.get(label, label)
     rows_by_sys, all_m = {}, {}
     for name, ps in preds.items():
         for p in ps:
