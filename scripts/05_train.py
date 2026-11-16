@@ -23,17 +23,20 @@ from pathlib import Path
 # Must be set before torch is imported: stops the "3.5 GiB reserved but unallocated" fragmentation OOMs.
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from common.gpu import BF16, BIG, DTYPE, DTYPE_NAME, describe  # noqa: E402
 from config import BASE_MODEL, OUT  # noqa: E402
 
 LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 MERGED_DIR = Path(os.getenv("MERGED_DIR", "/content/merged_sft"))
 MAX_LEN, MAX_PROMPT, MAX_COMPLETION = 3072, 2600, 448
-# DPO holds full-vocab (152k) logits for chosen AND rejected; pairs longer than this OOM a T4, so skip them.
-DPO_MAX_TOKENS = int(os.getenv("DPO_MAX_TOKENS", "2048"))
-SAVE_EVERY = 10  # optimizer steps between checkpoints on Drive (resume after a Colab disconnect)
-# T4 has no real bf16: AlignTune's "auto" picks bf16 (torch reports emulated support) -> ~5-10x slower.
-# Force fp16 for both the weights and the 4-bit compute dtype.
-QUANT = {"load_in_4bit": True, "bnb_4bit_quant_type": "nf4", "bnb_4bit_compute_dtype": "float16"}
+# DPO holds full-vocab (152k) logits for chosen AND rejected; on a 16 GB T4 long pairs OOM, so they are skipped.
+DPO_MAX_TOKENS = int(os.getenv("DPO_MAX_TOKENS", "4096" if BIG else "2048"))
+SAVE_EVERY = 10  # optimizer steps between checkpoints (resume after a disconnect)
+# Precision: bf16 on Ampere+ (RunPod), fp16 on T4 (it only emulates bf16 -> very slow).
+# 4-bit only on small cards; on 40-80 GB cards plain bf16 LoRA is faster and a bit more accurate.
+QUANT = {} if BIG else {"load_in_4bit": True, "bnb_4bit_quant_type": "nf4", "bnb_4bit_compute_dtype": DTYPE_NAME}
+PREC = dict(precision="bf16" if BF16 else "fp16", fp16=not BF16, bf16=BF16)
+SFT_BS, DPO_BS = (4, 2) if BIG else (1, 1)   # effective batch stays 16
 
 
 def mk(cls, **kw):
@@ -45,16 +48,20 @@ def mk(cls, **kw):
     return cls(**{k: v for k, v in kw.items() if k in names})
 
 
-def load_4bit(path):
-    import torch
-    from peft import prepare_model_for_kbit_training
+def load_train_model(path):
     from transformers import AutoTokenizer, BitsAndBytesConfig
     from common.model import load_causal_lm
     tok = AutoTokenizer.from_pretrained(str(path))
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
+    if BIG:
+        model = load_causal_lm(str(path), device_map={"": 0})
+        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        model.enable_input_require_grads()
+        return model, tok
+    from peft import prepare_model_for_kbit_training
     model = load_causal_lm(str(path), device_map={"": 0}, quantization_config=BitsAndBytesConfig(
-        load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_compute_dtype=torch.float16))
+        load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_compute_dtype=DTYPE))
     model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
     return model, tok
 
@@ -117,10 +124,10 @@ def sft_aligntune(a, data, run_dir):
     from aligntune.core.backend_factory import create_sft_trainer
     tr = create_sft_trainer(
         model_name=BASE_MODEL, dataset_name=str(data), backend="trl", task_type="sft",
-        output_dir=str(run_dir), num_epochs=a.epochs, batch_size=1, gradient_accumulation_steps=16,
+        output_dir=str(run_dir), num_epochs=a.epochs, batch_size=SFT_BS, gradient_accumulation_steps=16 // SFT_BS,
         learning_rate=2e-4, max_seq_length=MAX_LEN, max_samples=a.max_samples,
         use_peft=True, lora_r=16, lora_alpha=32, lora_dropout=0.05, lora_target_modules=LORA_TARGETS,
-        quantization=QUANT, precision="fp16", fp16=True, bf16=False, warmup_ratio=0.05,
+        quantization=QUANT, **PREC, warmup_ratio=0.05,
         completion_only_loss=True, assistant_only_loss=False, packing=False, group_by_length=False,
         gradient_checkpointing=True, use_gradient_checkpointing=True, load_best_model_at_end=False,
         save_strategy="steps", save_steps=SAVE_EVERY, save_total_limit=1, logging_steps=5, report_to="none")
@@ -130,15 +137,16 @@ def sft_aligntune(a, data, run_dir):
 def sft_trl(a, data, run_dir):
     from datasets import load_dataset
     from trl import SFTConfig, SFTTrainer
-    model, tok = load_4bit(BASE_MODEL)
+    model, tok = load_train_model(BASE_MODEL)
     ds = load_dataset("json", data_files=str(data), split="train")
     if a.max_samples:
         ds = ds.select(range(min(a.max_samples, len(ds))))
-    cfg = mk(SFTConfig, output_dir=str(run_dir), num_train_epochs=a.epochs, per_device_train_batch_size=1,
-             gradient_accumulation_steps=16, learning_rate=2e-4, max_length=MAX_LEN, fp16=True,
+    cfg = mk(SFTConfig, output_dir=str(run_dir), num_train_epochs=a.epochs, per_device_train_batch_size=SFT_BS,
+             gradient_accumulation_steps=16 // SFT_BS, learning_rate=2e-4, max_length=MAX_LEN,
+             fp16=not BF16, bf16=BF16,
              logging_steps=5, save_strategy="steps", save_steps=SAVE_EVERY, save_total_limit=1,
              warmup_ratio=0.05, lr_scheduler_type="cosine",
-             gradient_checkpointing=True, completion_only_loss=True, optim="paged_adamw_8bit",
+             gradient_checkpointing=True, completion_only_loss=True, optim="adamw_torch" if BIG else "paged_adamw_8bit",
              report_to="none")
     tr = SFTTrainer(model=model, args=cfg, train_dataset=ds, processing_class=tok, peft_config=lora())
     tr.train()
@@ -150,18 +158,19 @@ def sft_trl(a, data, run_dir):
 # mk() drops whichever spelling the installed TRL doesn't know. Reference log-probs are computed once up
 # front (precompute_ref_log_probs) so training never holds the policy and reference passes together.
 DPO_KW = dict(beta=0.5, rpo_alpha=0.2, max_length=MAX_LEN, max_prompt_length=MAX_PROMPT,
-              max_completion_length=MAX_COMPLETION, truncation_mode="keep_start",
-              precompute_ref_log_probs=True, precompute_ref_batch_size=1)
+              max_completion_length=MAX_COMPLETION, truncation_mode="keep_start")
+if not BIG:  # T4: score the reference once up front instead of during training
+    DPO_KW.update(precompute_ref_log_probs=True, precompute_ref_batch_size=1)
 
 
 def dpo_aligntune(a, model_path, data, run_dir):
     from aligntune.core.backend_factory import create_rl_trainer
     tr = create_rl_trainer(
         model_name=str(model_path), dataset_name=str(data), algorithm="dpo", backend=a.dpo_backend,
-        output_dir=str(run_dir), num_epochs=1, batch_size=1, gradient_accumulation_steps=16,
+        output_dir=str(run_dir), num_epochs=1, batch_size=DPO_BS, gradient_accumulation_steps=16 // DPO_BS,
         learning_rate=1e-5, max_seq_length=MAX_LEN, max_samples=a.max_samples,
         use_peft=True, lora_r=16, lora_alpha=32, lora_dropout=0.05, lora_target_modules=LORA_TARGETS,
-        quantization=QUANT, precision="fp16", fp16=True, bf16=False, warmup_ratio=0.1,
+        quantization=QUANT, **PREC, warmup_ratio=0.1,
         gradient_checkpointing=True, use_gradient_checkpointing=True, report_to="none", logging_steps=5,
         save_strategy="steps", save_steps=SAVE_EVERY, save_total_limit=1,
         loss_type=["sigmoid", "sft"], loss_weights=[1.0, 0.2], **DPO_KW)
@@ -177,14 +186,16 @@ def dpo_loss_kw(cls):
 def dpo_trl(a, model_path, data, run_dir):
     from datasets import load_dataset
     from trl import DPOConfig, DPOTrainer
-    model, tok = load_4bit(model_path)
+    model, tok = load_train_model(model_path)
     ds = load_dataset("json", data_files=str(data), split="train")
     if a.max_samples:
         ds = ds.select(range(min(a.max_samples, len(ds))))
-    cfg = mk(DPOConfig, output_dir=str(run_dir), num_train_epochs=1, per_device_train_batch_size=1,
-             gradient_accumulation_steps=16, learning_rate=1e-5, fp16=True, logging_steps=5,
+    cfg = mk(DPOConfig, output_dir=str(run_dir), num_train_epochs=1, per_device_train_batch_size=DPO_BS,
+             gradient_accumulation_steps=16 // DPO_BS, learning_rate=1e-5, fp16=not BF16, bf16=BF16,
+             logging_steps=5,
              save_strategy="steps", save_steps=SAVE_EVERY, save_total_limit=1, warmup_ratio=0.1,
-             lr_scheduler_type="cosine", gradient_checkpointing=True, optim="paged_adamw_8bit", report_to="none",
+             lr_scheduler_type="cosine", gradient_checkpointing=True,
+             optim="adamw_torch" if BIG else "paged_adamw_8bit", report_to="none",
              **dpo_loss_kw(DPOConfig), **DPO_KW)
     tr = DPOTrainer(model=model, ref_model=None, args=cfg, train_dataset=ds, processing_class=tok,
                     peft_config=lora())
@@ -232,6 +243,9 @@ def main():
     root = OUT / "smoke" if a.smoke else OUT
     if a.smoke:
         a.max_samples, a.epochs = a.max_samples or 24, 1
+        for d in ("run_sft", "run_dpo"):
+            shutil.rmtree(root / d, ignore_errors=True)
+    print("GPU:", describe())
 
     if a.stage == "sft":
         run_dir = root / "run_sft"

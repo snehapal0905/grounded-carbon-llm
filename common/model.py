@@ -8,15 +8,16 @@ from pathlib import Path
 
 import torch
 
+from common.gpu import DTYPE, GEN_BATCH
 from config import BASE_MODEL
 
 
 def load_causal_lm(path, **kw):
     from transformers import AutoModelForCausalLM
     try:
-        return AutoModelForCausalLM.from_pretrained(path, dtype=torch.float16, **kw)
+        return AutoModelForCausalLM.from_pretrained(path, dtype=DTYPE, **kw)
     except TypeError:
-        return AutoModelForCausalLM.from_pretrained(path, torch_dtype=torch.float16, **kw)
+        return AutoModelForCausalLM.from_pretrained(path, torch_dtype=DTYPE, **kw)
 
 
 class Generator:
@@ -31,7 +32,7 @@ class Generator:
         if load_in_4bit:
             from transformers import BitsAndBytesConfig
             kw["quantization_config"] = BitsAndBytesConfig(load_in_4bit=True,
-                                                           bnb_4bit_compute_dtype=torch.float16)
+                                                           bnb_4bit_compute_dtype=DTYPE)
         model = load_causal_lm(str(base), **kw)
         self.has_adapter = adapter_dir is not None and (Path(adapter_dir) / "adapter_config.json").exists()
         if self.has_adapter:
@@ -49,7 +50,7 @@ class Generator:
         return self.model.disable_adapter() if self.has_adapter else contextlib.nullcontext()
 
     @torch.inference_mode()
-    def generate(self, batch_messages, tuned=False, max_new_tokens=320, batch_size=8):
+    def generate(self, batch_messages, tuned=False, max_new_tokens=320, batch_size=GEN_BATCH):
         from tqdm import tqdm
         outs = []
         # sort by length so batches pad less; restore order after
