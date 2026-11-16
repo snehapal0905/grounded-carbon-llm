@@ -257,8 +257,6 @@ passages**. Judge: local Qwen2.5-14B (an older, larger Qwen than the Qwen3-4B be
 
 ![Results chart](docs/results_chart.png)
 
-![Results bar charts](docs/results_bars.svg)
-
 **What the numbers say**
 - **Plain RAG is not enough.** With a simple "use the context" prompt, the base model hallucinates on 17.3% of
   questions, refuses only 73% of out-of-corpus questions, makes up an answer for 11.7% of them, and almost never cites.
