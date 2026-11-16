@@ -22,6 +22,8 @@ from pathlib import Path
 
 # Must be set before torch is imported: stops the "3.5 GiB reserved but unallocated" fragmentation OOMs.
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+# One GPU only (Kaggle has 2 T4s; TRL's DPOTrainer refuses nn.DataParallel). Must precede the torch import.
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from common.gpu import BF16, BIG, DTYPE, DTYPE_NAME, describe  # noqa: E402
 from config import BASE_MODEL, OUT  # noqa: E402
@@ -73,21 +75,25 @@ def lora():
 
 
 def fp32_trainable():
-    """fp16 mixed precision needs fp32 trainable weights. Some loaders leave LoRA in bf16, which crashes the
-    grad scaler ('_amp_foreach_non_finite_check_and_unscale_cuda not implemented for BFloat16')."""
+    """For fp16 GPUs (T4). fp16 mixed precision needs fp32 trainable weights: some loaders leave LoRA in bf16,
+    which crashes the grad scaler ('..._unscale_ not implemented for BFloat16'). Frozen bf16 weights
+    (embeddings / lm_head / norms) go to fp16: the T4 has no bf16 matmul ('gemm input type BFloat16 ... compute
+    capability 8.0')."""
     import torch
     from transformers import Trainer
     orig = Trainer.__init__
 
     def init(self, *args, **kw):
         orig(self, *args, **kw)
-        n = 0
+        n = m = 0
         for p in self.model.parameters():
             if p.requires_grad and p.dtype != torch.float32:
                 p.data = p.data.float()
                 n += 1
-        if n:
-            print(f">> cast {n} trainable tensors to fp32 for fp16 training")
+            elif not p.requires_grad and p.dtype == torch.bfloat16:
+                p.data = p.data.to(torch.float16)
+                m += 1
+        print(f">> fp16 GPU: {n} trainable tensors -> fp32, {m} frozen bf16 tensors -> fp16")
 
     Trainer.__init__ = init
 

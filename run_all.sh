@@ -7,7 +7,7 @@
 #          nohup bash proj/run_all.sh > /workspace/run.log 2>&1 &  ;  tail -f /workspace/run.log
 # Env: WORKDIR (results, default /workspace)  CACHE_DIR (models, default WORKDIR)  PROJ (repo checkout)
 #      DATA_SRC (folder holding data/ + outputs/ from an earlier run, copied in once)
-#      STOP_AFTER=train (stop after DPO)  EPOCHS (SFT epochs, default 2)
+#      STOP_AFTER=sft | train (stop after SFT / after DPO)  EPOCHS (SFT epochs, default 2)
 set -euo pipefail
 
 W0=${WORKDIR:-/workspace}
@@ -16,6 +16,7 @@ SAVE=$W0/lexsi_karan_v2          # same layout as the Colab Drive folder
 PROJ=${PROJ:-$(cd "$(dirname "$0")" && pwd)}
 W=$SAVE/data/work; O=$SAVE/outputs
 mkdir -p "$W" "$O" "$C"
+export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}   # one GPU (Kaggle T4 x2: DPO refuses DataParallel)
 export HF_HOME=$C/hf OLLAMA_MODELS=$C/ollama PIP_CACHE_DIR=$C/pip
 log() { echo; echo "=== $(date +%H:%M:%S)  $*"; }
 
@@ -81,6 +82,7 @@ if [ ! -f "$O/smoke/adapter_dpo/adapter_config.json" ] && [ ! -f "$O/adapter_sft
   python scripts/05_train.py --stage dpo --smoke
 fi
 [ -f "$O/adapter_sft/adapter_config.json" ] || { log "SFT"; python scripts/05_train.py --stage sft --epochs "${EPOCHS:-2}"; }
+if [ "${STOP_AFTER:-}" = "sft" ]; then rm -rf "$O/run_sft" "$O/smoke"; log "STOP_AFTER=sft: adapter saved in $O"; exit 0; fi
 if [ ! -f "$O/preds/tuned_dpo.jsonl" ] && [ ! -f "$MERGED_DIR/config.json" ]; then
   log "merge"; python scripts/05_train.py --stage merge
 fi
