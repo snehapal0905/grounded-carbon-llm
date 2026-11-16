@@ -29,8 +29,9 @@ from config import BASE_MODEL, OUT  # noqa: E402
 LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 MERGED_DIR = Path(os.getenv("MERGED_DIR", "/content/merged_sft"))
 MAX_LEN, MAX_PROMPT, MAX_COMPLETION = 3072, 2600, 448
-# DPO holds full-vocab (152k) logits for chosen AND rejected; on a 16 GB T4 long pairs OOM, so they are skipped.
-DPO_MAX_TOKENS = int(os.getenv("DPO_MAX_TOKENS", "4096" if BIG else "2048"))
+# Pairs longer than this are skipped. TRL >= 1.18 scores only the answer tokens (fused LM head), so on a
+# 16 GB T4 full-length pairs fit; on older TRL set DPO_MAX_TOKENS=2048.
+DPO_MAX_TOKENS = int(os.getenv("DPO_MAX_TOKENS", str(MAX_LEN)))
 SAVE_EVERY = 10  # optimizer steps between checkpoints (resume after a disconnect)
 # Precision: bf16 on Ampere+ (RunPod), fp16 on T4 (it only emulates bf16 -> very slow).
 # 4-bit only on small cards; on 40-80 GB cards plain bf16 LoRA is faster and a bit more accurate.
@@ -69,6 +70,26 @@ def load_train_model(path):
 def lora():
     from peft import LoraConfig
     return LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, target_modules=LORA_TARGETS, task_type="CAUSAL_LM")
+
+
+def fp32_trainable():
+    """fp16 mixed precision needs fp32 trainable weights. Some loaders leave LoRA in bf16, which crashes the
+    grad scaler ('_amp_foreach_non_finite_check_and_unscale_cuda not implemented for BFloat16')."""
+    import torch
+    from transformers import Trainer
+    orig = Trainer.__init__
+
+    def init(self, *args, **kw):
+        orig(self, *args, **kw)
+        n = 0
+        for p in self.model.parameters():
+            if p.requires_grad and p.dtype != torch.float32:
+                p.data = p.data.float()
+                n += 1
+        if n:
+            print(f">> cast {n} trainable tensors to fp32 for fp16 training")
+
+    Trainer.__init__ = init
 
 
 def enable_resume(run_dir):
@@ -159,8 +180,6 @@ def sft_trl(a, data, run_dir):
 # front (precompute_ref_log_probs) so training never holds the policy and reference passes together.
 DPO_KW = dict(beta=0.5, rpo_alpha=0.2, max_length=MAX_LEN, max_prompt_length=MAX_PROMPT,
               max_completion_length=MAX_COMPLETION, truncation_mode="keep_start")
-if not BIG:  # T4: score the reference once up front instead of during training
-    DPO_KW.update(precompute_ref_log_probs=True, precompute_ref_batch_size=1)
 
 
 def dpo_aligntune(a, model_path, data, run_dir):
@@ -246,6 +265,8 @@ def main():
         for d in ("run_sft", "run_dpo"):
             shutil.rmtree(root / d, ignore_errors=True)
     print("GPU:", describe())
+    if not BF16:
+        fp32_trainable()
 
     if a.stage == "sft":
         run_dir = root / "run_sft"

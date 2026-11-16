@@ -1,32 +1,35 @@
 #!/usr/bin/env bash
-# Karan v2 pipeline on a RunPod GPU pod (A100 / L40S / H100). Runs on the server, so closing the
-# laptop does not stop it. Every stage is skipped if its output already exists -> just rerun to resume.
+# Karan v2 pipeline as one script: Kaggle (free, see kaggle/karan_v2_kaggle.ipynb) or a RunPod pod.
+# Runs on the server, so closing the laptop does not stop it. Every stage is skipped if its output
+# already exists -> just rerun to resume.
 #
-#   cd /workspace && git clone -b karan-v2 https://github.com/snehapal0905/grounded-carbon-llm proj
-#   nohup bash proj/runpod/run_all.sh > /workspace/run.log 2>&1 &
-#   tail -f /workspace/run.log
+# RunPod:  cd /workspace && git clone -b karan-v2 https://github.com/snehapal0905/grounded-carbon-llm proj
+#          nohup bash proj/run_all.sh > /workspace/run.log 2>&1 &  ;  tail -f /workspace/run.log
+# Env: WORKDIR (results, default /workspace)  CACHE_DIR (models, default WORKDIR)  PROJ (repo checkout)
+#      DATA_SRC (folder holding data/ + outputs/ from an earlier run, copied in once)
+#      STOP_AFTER=train (stop after DPO)  EPOCHS (SFT epochs, default 2)
 set -euo pipefail
 
-W0=/workspace
+W0=${WORKDIR:-/workspace}
+C=${CACHE_DIR:-$W0}
 SAVE=$W0/lexsi_karan_v2          # same layout as the Colab Drive folder
-PROJ=$W0/proj
+PROJ=${PROJ:-$(cd "$(dirname "$0")" && pwd)}
 W=$SAVE/data/work; O=$SAVE/outputs
-mkdir -p "$W" "$O"
-export HF_HOME=$W0/hf OLLAMA_MODELS=$W0/ollama PIP_CACHE_DIR=$W0/pip
+mkdir -p "$W" "$O" "$C"
+export HF_HOME=$C/hf OLLAMA_MODELS=$C/ollama PIP_CACHE_DIR=$C/pip
 log() { echo; echo "=== $(date +%H:%M:%S)  $*"; }
 
-# ---- 0. data from Colab (optional): upload the Drive folder zip to /workspace -------------------
+# ---- 0. data from an earlier run (optional) ---------------------------------------------------------
+if [ ! -f "$O/pref/train.jsonl" ] && [ -n "${DATA_SRC:-}" ] && [ -d "$DATA_SRC" ]; then
+  log "copying earlier data/outputs from $DATA_SRC"
+  cp -r "$DATA_SRC"/. "$SAVE"/
+  rm -rf "$O/smoke"; [ -f "$O/adapter_sft/adapter_config.json" ] || rm -rf "$O/run_sft"
+fi
 if [ ! -f "$O/pref/train.jsonl" ] && ls $W0/lexsi_karan_v2*.zip >/dev/null 2>&1; then
   log "unzipping Colab data"
   for z in $W0/lexsi_karan_v2*.zip; do unzip -q -o "$z" -d $W0; done
-fi
-# predictions made on the T4 are kept aside: all 4 systems are regenerated on this GPU (fair comparison)
-if [ -d "$O/preds" ] && [ ! -f "$O/.runpod" ]; then
-  log "moving Colab T4 preds/results aside"
-  mv "$O/preds" "$O/preds_colab_t4"; [ -d "$O/results" ] && mv "$O/results" "$O/results_colab_t4"
   rm -rf "$O/smoke" "$O/run_sft" "$O/run_dpo"
 fi
-touch "$O/.runpod"
 
 cd "$PROJ"; git pull -q || true
 for f in chunks.jsonl llm_cache.jsonl ingest_stats.json; do
@@ -34,17 +37,25 @@ for f in chunks.jsonl llm_cache.jsonl ingest_stats.json; do
 done
 
 # ---- 1. install -----------------------------------------------------------------------------------
-if [ ! -f $W0/.installed ]; then
+if [ ! -f $C/.installed ]; then
   log "pip install"
   pip install -q aligntune rank_bm25 sentence-transformers litellm python-dotenv auditkit "curatorkit[all]" 2>&1 | tail -3
+  # TRL 1.18 scores only answer tokens in DPO/SFT (no 152k-vocab logits) -> fits a 16 GB T4. AlignTune pins 1.7.1.
+  pip install -q "trl==1.18.0" 2>&1 | tail -2
   apt-get -qq update >/dev/null && apt-get -qq install -y zstd pciutils lshw zip >/dev/null
   curl -fsSL https://ollama.com/install.sh | sh >/dev/null
-  touch $W0/.installed
+  touch $C/.installed
 fi
 python -c "import torch,trl,transformers;from common.gpu import describe;print(describe(),'trl',trl.__version__,'transformers',transformers.__version__)"
+# on a big GPU, regenerate every system's answers here (fair comparison); T4 answers from Colab are reused on T4
+if python -c "from common.gpu import BIG; raise SystemExit(0 if BIG else 1)" && [ -d "$O/preds" ] && [ ! -f "$O/.big_gpu" ]; then
+  log "moving T4 preds/results aside (regenerated on this GPU)"
+  mv "$O/preds" "$O/preds_t4"; [ -d "$O/results" ] && mv "$O/results" "$O/results_t4"
+fi
+python -c "from common.gpu import BIG; raise SystemExit(0 if BIG else 1)" && touch "$O/.big_gpu" || true
 
 GEN=ollama_chat/qwen2.5:14b; JUDGE=ollama_chat/gemma3:12b
-export DATA_DIR=$SAVE/data OUT_DIR=$O MERGED_DIR=$W0/merged_sft LITELLM_LOCAL_MODEL_COST_MAP=True \
+export DATA_DIR=$SAVE/data OUT_DIR=$O MERGED_DIR=$C/merged_sft LITELLM_LOCAL_MODEL_COST_MAP=True \
   GEN_MODEL=$GEN GATE_MODEL=$GEN VERIFY_MODEL=$GEN JUDGE_MODEL=$JUDGE AUDIT_JUDGE=litellm:$JUDGE \
   CACHE_FALLBACK_MODELS=groq/openai/gpt-oss-120b LLM_CONCURRENCY=8 LLM_TIMEOUT=600 OLLAMA_NUM_PARALLEL=8 \
   N_PREF=800 NEG_RATE=0.25 MAX_REFUSAL_SHARE=0.28
@@ -69,11 +80,13 @@ if [ ! -f "$O/smoke/adapter_dpo/adapter_config.json" ] && [ ! -f "$O/adapter_sft
   python scripts/05_train.py --stage sft --smoke
   python scripts/05_train.py --stage dpo --smoke
 fi
-[ -f "$O/adapter_sft/adapter_config.json" ] || { log "SFT"; python scripts/05_train.py --stage sft --epochs 2; }
+[ -f "$O/adapter_sft/adapter_config.json" ] || { log "SFT"; python scripts/05_train.py --stage sft --epochs "${EPOCHS:-2}"; }
 if [ ! -f "$O/preds/tuned_dpo.jsonl" ] && [ ! -f "$MERGED_DIR/config.json" ]; then
   log "merge"; python scripts/05_train.py --stage merge
 fi
 [ -f "$O/adapter_dpo/adapter_config.json" ] || { log "DPO"; python scripts/05_train.py --stage dpo; }
+rm -rf "$O/run_sft" "$O/run_dpo" "$O/smoke"   # checkpoints no longer needed once adapters exist
+if [ "${STOP_AFTER:-}" = "train" ]; then log "STOP_AFTER=train: adapters saved in $O"; exit 0; fi
 
 # ---- 4. answer the test set with 4 systems, then score --------------------------------------------
 log "generate"; python scripts/06_generate.py
