@@ -97,6 +97,22 @@ def fp32_trainable():
 
     Trainer.__init__ = init
 
+    # AlignTune builds DPOConfig without fp16/bf16 flags, and TRL then defaults to bf16=True (bf16 autocast),
+    # which the T4 cannot run. Force fp16 on every TRL config created without an explicit precision.
+    import trl
+    for name in ("DPOConfig", "SFTConfig"):
+        cls = getattr(trl, name, None)
+        if cls is None:
+            continue
+        cinit = cls.__init__
+
+        def cfg_init(self, *a, _orig=cinit, **kw):
+            if not kw.get("bf16") and "fp16" not in kw:
+                kw.update(fp16=True, bf16=False)
+            _orig(self, *a, **kw)
+
+        cls.__init__ = cfg_init
+
 
 def enable_resume(run_dir):
     """Make every HF Trainer (AlignTune's included) resume from the newest checkpoint in run_dir."""
