@@ -14,6 +14,14 @@ missing, and makes measurably fewer unsupported claims.
 > hallucination rate 4.7% → 1.3% (72% fewer unsupported answers), strict accuracy 30.0% → 50.0%, correct refusals 100.0%, AuditKIT F1 0.709 → 0.736. Trained in 43 min on one free T4.**
 > Trade-off: over-refusal rose 6.7% → 12.2%.
 
+```mermaid
+xychart-beta
+    title "Hallucination rate on 150 test questions (%, lower is better)"
+    x-axis ["Base + RAG", "Base + strict prompt", "Fine-tuned (ours)"]
+    y-axis "% of answers with an unsupported claim" 0 --> 20
+    bar [17.3, 4.7, 1.3]
+```
+
 ## The three Lexsi Labs toolkits: where each one is used
 | Stage | Toolkit | Where in the code | What it does here |
 |---|---|---|---|
@@ -36,6 +44,7 @@ missing, and makes measurably fewer unsupported claims.
 10. [How to run](#how-to-run)
 11. [Progress](#progress)
 12. [Limitations](#limitations)
+13. [v2: SFT → DPO to cut over-refusal (in progress)](#v2-sft--dpo-to-cut-over-refusal-in-progress)
 
 ---
 
@@ -85,6 +94,21 @@ Exact versions and download links: [`docs/SOURCES.md`](docs/SOURCES.md). The PDF
 download them into `data/raw/`.
 
 ## Pipeline overview
+```mermaid
+flowchart LR
+    A[7 standards PDFs] --> B[01_ingest<br/>445 chunks<br/>leak-free split]
+    B --> C[02_curate<br/><b>CuratorKIT</b><br/>QA gen + hallucination gate]
+    B --> D[03_unanswerable<br/>verified 'not in docs' questions]
+    C --> E[04_build_sets<br/>SFT set + test set]
+    D --> E
+    E --> F[05_train<br/><b>AlignTune</b><br/>LoRA SFT, Qwen3-4B]
+    F --> G[06_generate<br/>3 systems, same passages]
+    G --> H[07_evaluate<br/><b>AuditKIT</b> + LLM judge]
+    H --> I[report, metrics, chart]
+```
+
+<details><summary>Detailed text version</summary>
+
 ```
  PDFs (7 standards)
    │
@@ -111,6 +135,7 @@ download them into `data/raw/`.
    ▼ 07_evaluate (AuditKIT) ────► hallucination rate, correct refusal, over-refusal, accuracy,
                                   citation rate, retrieval recall + AuditKIT metrics → report + chart
 ```
+</details>
 
 ## Step-by-step: what each script does
 
@@ -219,7 +244,7 @@ Test set: 150 questions built only from test-split chunks: 90 answerable (Curato
 ### Results
 Test set: **150 questions** (90 answerable from held-out test chunks, 60 verified *not* in the documents), all from
 chunks the model never saw in training. Every system gets the **same question and the same top-4 retrieved
-passages**. Judge: local Qwen2.5-14B (different family from the Qwen3-4B being tested). Retrieval recall@4: 77.8%.
+passages**. Judge: local Qwen2.5-14B (an older, larger Qwen than the Qwen3-4B being tested, so the same model family; the v2 run below uses a Gemma judge to remove that bias). Retrieval recall@4: 77.8%.
 
 | Metric | Base + RAG | Base + strict prompt + RAG | **Fine-tuned + RAG (ours)** |
 |---|---|---|---|
@@ -237,6 +262,22 @@ passages**. Judge: local Qwen2.5-14B (different family from the Qwen3-4B being t
 | AuditKIT f1_score (vs gold) ↑ | 0.277 | 0.709 | 0.736 |
 
 ![Results chart](docs/results_chart.png)
+
+```mermaid
+xychart-beta
+    title "Strict accuracy on 90 answerable questions (%, higher is better)"
+    x-axis ["Base + RAG", "Base + strict prompt", "Fine-tuned (ours)"]
+    y-axis "% fully correct" 0 --> 60
+    bar [26.7, 30.0, 50.0]
+```
+
+```mermaid
+xychart-beta
+    title "Over-refusal on 90 answerable questions (%, lower is better)"
+    x-axis ["Base + RAG", "Base + strict prompt", "Fine-tuned (ours)"]
+    y-axis "% refused although answerable" 0 --> 15
+    bar [3.3, 6.7, 12.2]
+```
 
 **What the numbers say**
 - **Plain RAG is not enough.** With a simple "use the context" prompt, the base model hallucinates on 17.3% of
@@ -268,6 +309,13 @@ All raw outputs are in the repo: [`outputs/results/`](outputs/results) (judged a
 | After dropping non-self-contained questions ("the passage…") | 718 |
 | "Not in the documents" candidates → verified against retrieval | 246 → **150** (75 missing detail, 42 out of scope, 33 false premise) |
 | **SFT training examples** | **741** train + 38 validation: 552 grounded answers with citations, 157 hard negatives (same question, evidence removed → refusal), 70 unanswerable → refusal (29% refusals) |
+
+```mermaid
+pie showData title SFT training set (741 examples)
+    "Grounded answer with [S#] citation" : 552
+    "Hard negative: evidence removed, refuse" : 157
+    "Unanswerable: refuse" : 70
+```
 
 ### Training (AlignTune)
 `aligntune.create_sft_trainer` with the Unsloth backend: Qwen3-4B-Instruct-2507, 4-bit, LoRA r=16/α=32 on all
@@ -353,7 +401,8 @@ python app.py        # prints a public gradio.live link
 - [x] Evaluation of 3 systems (grounding judge + **AuditKIT**): results table and chart above
 - [ ] Hand spot-check of the test set (the unanswerables were LLM-verified against retrieval)
 - [ ] Publish the LoRA adapter on Hugging Face (`outputs/adapter`, saved from the Colab run)
-- [ ] Second epoch / assistant-only loss to reduce over-refusal
+- [x] v2: second epoch with answer-only loss, quote-then-answer format (SFT trained, see [v2](#v2-sft--dpo-to-cut-over-refusal-in-progress))
+- [ ] v2: DPO with answer-over-refusal pairs, then evaluation with a Gemma judge (running)
 
 ## Engineering notes: what broke and how it was fixed
 | Problem | Fix |
@@ -368,7 +417,7 @@ python app.py        # prints a public gradio.live link
 | Windows console crashed on Unicode (cp1252). | stdout/stderr are reconfigured to UTF-8 in `config.py`. |
 
 ## Limitations
-- The judge is an LLM (Qwen2.5-14B, a different family from the Qwen3-4B being tested). Verdicts were not hand-audited.
+- The judge is an LLM (Qwen2.5-14B) from the same model family as the Qwen3-4B being tested, which can bias it in the model's favour. Verdicts were not hand-audited. The v2 run uses a Gemma3-12B judge plus HHEM for this reason.
 - The test set is LLM-built and LLM-verified, not hand-checked. 150 questions give wide-ish CIs (see table).
 - Trained for 1 epoch to fit the free GPU session. The fine-tuned model over-refuses more than the baseline (12.2% vs 6.7%).
 - QA pairs were generated from 260 of the 445 chunks only, to fit the compute budget.
@@ -380,6 +429,47 @@ python app.py        # prints a public gradio.live link
 Lexsi Labs for CuratorKIT, AlignTune and AuditKIT · Qwen team · Groq · Verra, Gold Standard, ICVCM,
 UNFCCC and the Government of India for publishing their standards openly.
 
-## v2 (in progress)
+## v2: SFT → DPO to cut over-refusal (in progress)
 
-[`v2_karan/`](v2_karan/README.md) holds a research-based extension that targets the remaining over-refusal: quote-then-answer SFT, then DPO with answer-over-refusal pairs, scored by a Gemma judge (a different model family). The SFT stage is trained (loss 2.30 → 1.02); DPO and evaluation are still running. All results above come from the main pipeline.
+The main model's one clear weakness is **over-refusal (12.2%)**: it sometimes says "Not found" when the answer is in the sources. v2, in [`v2_karan/`](v2_karan/README.md), is a research-based follow-up aimed at that weakness and at judge bias. **Status at submission:** SFT trained; DPO and test-set evaluation still running. Every result above comes from the main pipeline.
+
+```mermaid
+flowchart LR
+    A[Same chunks and<br/>test questions] --> B[SFT<br/><b>AlignTune</b><br/>quote-then-answer,<br/>answer-only loss, 2 epochs]
+    B --> C[Merge LoRA]
+    C --> D[DPO<br/><b>AlignTune</b><br/>579 preference pairs]
+    D --> E[Evaluate<br/>Gemma3-12B judge + HHEM<br/>+ <b>AuditKIT</b>]
+```
+
+| | Main pipeline | v2 |
+|---|---|---|
+| Output format | answer + [S#] | quote the supporting passage, then answer + [S#] |
+| Loss | whole prompt (incl. 4 passages) | answer tokens only |
+| Epochs | 1 | 2 |
+| Preference stage | none | DPO (sigmoid + 0.2 × SFT loss, β 0.5) |
+| Judge | Qwen2.5-14B (same family as the model) | Gemma3-12B (different family) + HHEM |
+| GPU | Colab T4, 43 min | Kaggle T4, 4.05 h (SFT) |
+
+**DPO preference pairs (579).** The largest group directly targets over-refusal:
+
+```mermaid
+pie showData title v2 DPO preference pairs (579)
+    "Answer over refusal (fixes over-refusal)" : 200
+    "Refusal over made-up answer" : 179
+    "Right citation over wrong citation" : 100
+    "Faithful answer over contradiction" : 100
+```
+
+**SFT training (Kaggle T4, [`v2_karan/results/run.log`](v2_karan/results/run.log)).** 738 examples (589 grounded, 110 hard negatives, 69 unanswerable), LoRA r=16 (33M params, 0.81%), 94 steps, peak 7.6 GB. Loss fell from 2.30 to 1.02 and token accuracy rose from 0.58 to 0.75. v2's loss covers only the answer, so it is not comparable with the main run's whole-prompt loss.
+
+```mermaid
+xychart-beta
+    title "v2 SFT training loss (answer tokens only)"
+    x-axis "training step" [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90]
+    y-axis "loss" 0.8 --> 2.4
+    line [2.30, 1.95, 1.84, 1.76, 1.62, 1.55, 1.49, 1.37, 1.35, 1.31, 1.19, 1.12, 1.06, 1.04, 1.04, 1.04, 1.01, 1.02]
+```
+
+**Making it run on free GPUs.** Without bf16 on the T4, AlignTune/TRL crashed in several places. The fixes: fp16 everywhere, fp32 LoRA weights, TRL 1.18's fused LM head so DPO fits in 16 GB, single-GPU mode, and a resumable 3-run Kaggle notebook ([`v2_karan/kaggle/karan_v2_kaggle.ipynb`](v2_karan/kaggle/karan_v2_kaggle.ipynb)) that chains each run's output into the next.
+
+**Next:** finish DPO, answer the same 150 test questions, and add a side-by-side table here (main vs v2, same questions, both judges).
