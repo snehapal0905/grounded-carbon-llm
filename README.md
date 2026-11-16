@@ -379,3 +379,7 @@ python app.py        # prints a public gradio.live link
 ## Acknowledgements
 Lexsi Labs for CuratorKIT, AlignTune and AuditKIT · Qwen team · Groq · Verra, Gold Standard, ICVCM,
 UNFCCC and the Government of India for publishing their standards openly.
+
+## v2 (in progress)
+
+[`v2_karan/`](v2_karan/README.md) holds a research-based extension that targets the remaining over-refusal: quote-then-answer SFT, then DPO with answer-over-refusal pairs, scored by a Gemma judge (a different model family). The SFT stage is trained (loss 2.30 → 1.02); DPO and evaluation are still running. All results above come from the main pipeline.

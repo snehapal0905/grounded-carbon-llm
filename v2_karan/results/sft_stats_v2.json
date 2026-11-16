@@ -1,0 +1,15 @@
+{
+  "sft": {
+    "unanswerable": 69,
+    "positive": 589,
+    "hard_negative": 110
+  },
+  "sft_train": 738,
+  "pref": {
+    "refusal_over_answer": 179,
+    "right_over_wrong_citation": 100,
+    "faithful_over_contradiction": 100,
+    "answer_over_refusal": 200
+  },
+  "test_rows": 148
+}
