@@ -1,6 +1,6 @@
 # v2 (Karan) — quote-then-answer SFT → DPO, cross-family judge
 
-A research-based extension of the main pipeline. **Status at submission:** SFT stage trained; DPO and test-set evaluation still running. The main README's results are from the main pipeline, not this one.
+A research-based extension of the main pipeline. **Status:** done. SFT + DPO trained, and evaluated head-to-head with the main model on its 150 test questions with a Gemma3-12B judge ([`results/report.md`](results/report.md)).
 
 ## What changes vs. the main pipeline
 - **SFT:** quote-then-answer format (quote the supporting passage, then answer with [S#]), answer-only loss, 2 epochs.
@@ -21,7 +21,22 @@ A research-based extension of the main pipeline. **Status at submission:** SFT s
 | Train loss | 2.30 → 1.02 |
 | Token accuracy | 0.58 → 0.75 |
 
-These are training metrics. Test-set numbers will be added when DPO and evaluation finish.
+## DPO result (Kaggle T4)
+579 pairs, 1 epoch, 37 steps, 2.3 h, peak 10.2 GB. Loss 0.84 → 0.22, reward margin 0 → 4.5, reward accuracy 1.0.
+
+## Test result: same 150 questions as the main pipeline, Gemma3-12B judge
+| | Base + grounding prompt | v2: SFT | v2: SFT + DPO | Main: fine-tuned |
+|---|---|---|---|---|
+| Did the right thing ↑ | 97.3 | 96.7 | 95.3 | **98.0** |
+| Grounded-refusal F1 ↑ | 89.3 | **91.3** | **91.3** | 90.0 |
+| Hallucination among answered ↓ | 1.2 | **0.0** | 1.3 | **0.0** |
+| Answered an unanswerable ↓ | **0.0** | **0.0** | **0.0** | **0.0** |
+| Over-refusal on answerable ↓ | **11.1** | 14.4 | 16.7 | 12.2 |
+| Strict accuracy on answerable ↑ | 70.0 | 66.7 | 65.6 | **73.3** |
+| Cites the gold passage ↑ | 85.1 | **88.1** | 87.9 | n/a |
+| Quote copied verbatim ↑ | 76.6 | **88.3** | 85.3 | – |
+
+The main model is the best overall. v2 SFT ties it on hallucination (0%) and leads on verifiable grounding: F1, gold citations, and verbatim quotes. DPO did not cut over-refusal; the pair mix needs rebalancing. No fine-tuned system differs significantly from the grounding-prompt baseline (McNemar p ≥ 0.45).
 
 ## Running it
 These files replace their counterparts in the repo root (the full code is on branch `karan-v2`). Run `kaggle/karan_v2_kaggle.ipynb` on Kaggle with `RUN = 1, 2, 3` (SFT, then DPO, then answer + score).
