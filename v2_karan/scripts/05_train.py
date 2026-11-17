@@ -15,6 +15,7 @@ import argparse
 import dataclasses
 import json
 import os
+import re
 import shutil
 import sys
 import traceback
@@ -154,11 +155,18 @@ def collect_adapter(run_dir, dest):
     cfgs = [p for p in Path(run_dir).rglob("adapter_config.json")]
     if not cfgs:
         raise FileNotFoundError(f"No adapter_config.json under {run_dir}")
+    # TRL's DPOTrainer keeps a frozen copy of the starting adapter named "ref"; PEFT saves it in a "ref/"
+    # subfolder next to the trained "default" adapter. Never pick that copy: take the shallowest final adapter.
+    cfgs = [p for p in cfgs if "ref" not in p.relative_to(run_dir).parts[:-1]]
     final = [p for p in cfgs if "checkpoint-" not in str(p)]
-    src = (final or sorted(cfgs, key=lambda p: p.stat().st_mtime))[-1].parent
+    if final:
+        src = min(final, key=lambda p: len(p.parts)).parent
+    else:
+        src = sorted(cfgs, key=lambda p: int(re.search(r"checkpoint-(\d+)", str(p)).group(1)))[-1].parent
     if Path(dest).exists():
         shutil.rmtree(dest)
     shutil.copytree(src, dest, ignore=shutil.ignore_patterns("optimizer.pt", "*.pth", "rng_state*", "scheduler.pt"))
+    (Path(dest) / "SOURCE").write_text(f"{src}\n")   # run_all.sh checks this to reject a bad copy
     print(f"Adapter {src} -> {dest}")
 
 

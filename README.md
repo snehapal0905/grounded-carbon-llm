@@ -38,7 +38,7 @@ missing, and makes measurably fewer unsupported claims.
 10. [How to run](#how-to-run)
 11. [Progress](#progress)
 12. [Limitations](#limitations)
-13. [v2: SFT → DPO to cut over-refusal (in progress)](#v2-sft--dpo-to-cut-over-refusal-in-progress)
+13. [v2: SFT → DPO, head-to-head with the main model](#v2-sft--dpo-head-to-head-with-the-main-model)
 
 ---
 
@@ -374,8 +374,8 @@ python app.py        # prints a public gradio.live link
 - [x] Evaluation of 3 systems (grounding judge + **AuditKIT**): results table and chart above
 - [ ] Hand spot-check of the test set (the unanswerables were LLM-verified against retrieval)
 - [ ] Publish the LoRA adapter on Hugging Face (`outputs/adapter`, saved from the Colab run)
-- [x] v2: second epoch with answer-only loss, quote-then-answer format (SFT trained, see [v2](#v2-sft--dpo-to-cut-over-refusal-in-progress))
-- [ ] v2: DPO with answer-over-refusal pairs, then evaluation with a Gemma judge (running)
+- [x] v2: second epoch with answer-only loss, quote-then-answer format (see [v2](#v2-sft--dpo-head-to-head-with-the-main-model))
+- [x] v2: DPO with answer-over-refusal pairs, then head-to-head evaluation on the same 150 questions with a Gemma judge (see [results](#head-to-head-result))
 
 ## Engineering notes: what broke and how it was fixed
 | Problem | Fix |
@@ -390,7 +390,7 @@ python app.py        # prints a public gradio.live link
 | Windows console crashed on Unicode (cp1252). | stdout/stderr are reconfigured to UTF-8 in `config.py`. |
 
 ## Limitations
-- The judge is an LLM (Qwen2.5-14B) from the same model family as the Qwen3-4B being tested, which can bias it in the model's favour. Verdicts were not hand-audited. The v2 run uses a Gemma3-12B judge plus HHEM for this reason.
+- The judge is an LLM (Qwen2.5-14B) from the same model family as the Qwen3-4B being tested, which can bias it in the model's favour. Verdicts were not hand-audited. The v2 head-to-head re-judged the main model with Gemma3-12B (a different family) and found the same 0% hallucination, 100% correct refusal, and 12.2% over-refusal.
 - The test set is LLM-built and LLM-verified, not hand-checked. 150 questions give wide-ish CIs (see table).
 - Trained for 1 epoch to fit the free GPU session. The fine-tuned model over-refuses more than the baseline (12.2% vs 6.7%).
 - QA pairs were generated from 260 of the 445 chunks only, to fit the compute budget.
@@ -402,9 +402,9 @@ python app.py        # prints a public gradio.live link
 Lexsi Labs for CuratorKIT, AlignTune and AuditKIT · Qwen team · Groq · Verra, Gold Standard, ICVCM,
 UNFCCC and the Government of India for publishing their standards openly.
 
-## v2: SFT → DPO to cut over-refusal (in progress)
+## v2: SFT → DPO, head-to-head with the main model
 
-The main model's one clear weakness is **over-refusal (12.2%)**: it sometimes says "Not found" when the answer is in the sources. v2, in [`v2_karan/`](v2_karan/README.md), is a research-based follow-up aimed at that weakness and at judge bias. **Status at submission:** SFT trained; DPO and test-set evaluation still running. Every result above comes from the main pipeline.
+The main model's one clear weakness is **over-refusal (12.2%)**: it sometimes says "Not found" when the answer is in the sources. v2, in [`v2_karan/`](v2_karan/README.md), is a research-based follow-up aimed at that weakness and at judge bias. It is fully trained (SFT + DPO) and was evaluated **head-to-head with the main model on the same 150 test questions, with a judge from a different model family** ([results below](#head-to-head-result)).
 
 ```mermaid
 flowchart LR
@@ -421,7 +421,7 @@ flowchart LR
 | Epochs | 1 | 2 |
 | Preference stage | none | DPO (sigmoid + 0.2 × SFT loss, β 0.5) |
 | Judge | Qwen2.5-14B (same family as the model) | Gemma3-12B (different family) + HHEM |
-| GPU | Colab T4, 43 min | Kaggle T4, 4.05 h (SFT) |
+| GPU | Colab T4, 43 min | Kaggle T4, 4.05 h (SFT) + 2.3 h (DPO) |
 
 **DPO preference pairs (579).** The largest group directly targets over-refusal:
 
@@ -431,6 +431,36 @@ flowchart LR
 
 ![v2 SFT training loss](docs/v2_sft_loss.svg)
 
-**Making it run on free GPUs.** Without bf16 on the T4, AlignTune/TRL crashed in several places. The fixes: fp16 everywhere, fp32 LoRA weights, TRL 1.18's fused LM head so DPO fits in 16 GB, single-GPU mode, and a resumable 3-run Kaggle notebook ([`v2_karan/kaggle/karan_v2_kaggle.ipynb`](v2_karan/kaggle/karan_v2_kaggle.ipynb)) that chains each run's output into the next.
+**Making it run on free GPUs.** Without bf16 on the T4, AlignTune/TRL crashed in several places. The fixes: fp16 everywhere (including TRL's DPO/SFT configs, which default to bf16), fp32 LoRA weights, TRL 1.18's fused LM head so DPO fits in 16 GB, single-GPU mode, saving TRL's trained DPO adapter rather than its frozen `ref` copy, and a resumable 3-run Kaggle notebook ([`v2_karan/kaggle/karan_v2_kaggle.ipynb`](v2_karan/kaggle/karan_v2_kaggle.ipynb)) that chains each run's output into the next.
 
-**Next:** finish DPO, answer the same 150 test questions, and add a side-by-side table here (main vs v2, same questions, both judges).
+**DPO training.** 579 pairs, 1 epoch, 37 steps, 2.3 h, peak 10.2 GB. Loss 0.84 → 0.22; reward margin (chosen vs rejected) 0 → 4.5; the model preferred the chosen answer on 100% of training pairs by the end.
+
+### Head-to-head result
+
+All five systems answered **the main pipeline's exact 150 test questions** (90 answerable, 60 unanswerable) from the same 4 retrieved passages. All were scored by **Gemma3-12B**, which is not a Qwen model, so the same-family bias in the main table above doesn't apply. None of these questions are in v2's training data. Full table: [`v2_karan/results/report.md`](v2_karan/results/report.md).
+
+![Head-to-head: base, v2 SFT, v2 SFT+DPO and the main fine-tuned model on the same 150 questions](docs/head_to_head.svg)
+
+| Metric | Base + simple prompt | Base + grounding prompt | v2: SFT | v2: SFT + DPO | **Main: fine-tuned** |
+|---|---|---|---|---|---|
+| Did the right thing (answer or refuse correctly) ↑ | 91.3 | 97.3 | 96.7 | 95.3 | **98.0** |
+| Grounded-refusal F1 (Trust-Score style) ↑ | 81.1 | 89.3 | **91.3** | **91.3** | 90.0 |
+| Hallucination among answered ↓ | 1.0 | 1.2 | **0.0** | 1.3 | **0.0** |
+| Answered an unanswerable question ↓ | 18.3 | **0.0** | **0.0** | **0.0** | **0.0** |
+| Over-refusal on answerable ↓ | **3.3** | 11.1 | 14.4 | 16.7 | 12.2 |
+| Accuracy on answerable (strict) ↑ | **90.0** | 70.0 | 66.7 | 65.6 | 73.3 |
+| Cites the gold passage ↑ | 7.1 | 85.1 | **88.1** | 87.9 | n/a¹ |
+| Supporting quote copied verbatim ↑ | – | 76.6 | **88.3** | 85.3 | – |
+| Exact refusal sentence ↑ | 0.0 | **100** | **100** | **100** | **100** |
+
+All %. ¹ Scored from its saved predictions, which lack gold-passage positions; its own evaluation reports a 97.5% citation rate.
+
+**What this shows**
+- **The main fine-tuned model is the best overall:** it does the right thing most often (98.0%), makes no hallucinations, never answers an unanswerable question, and is the most accurate of the grounded systems (73.3% strict).
+- **Its results hold up under a different-family judge.** Gemma reproduces Qwen's main findings: 0% hallucination, 100% correct refusal, and 12.2% over-refusal.
+- **v2 SFT ties on hallucination (0%) and leads on verifiable grounding:** the highest grounded-refusal F1 (91.3), the most gold-passage citations (88.1%), and 88.3% of its supporting quotes are verbatim, so a reader can check each answer.
+- **DPO did not reduce over-refusal** (14.4% → 16.7%), even though 200 of its pairs targeted it. It learned its training pairs perfectly (reward accuracy 1.0) but this didn't carry over to the test set; the refusal-over-answer pairs probably outweighed the answer-over-refusal ones. Rebalancing the pairs would be the next step.
+- **None of the fine-tuned systems is significantly different from a well-prompted base model** (McNemar p ≥ 0.45 vs base + grounding prompt). On this test set, most of the gain comes from grounding plus the exact refusal rule; fine-tuning adds a little, and makes the format and refusal string reliable without a long prompt.
+- **The simple-prompt baseline is the most "accurate" because it answers everything:** it also answers 18.3% of unanswerable questions and cites the right passage only 7% of the time.
+
+Caveats: 150 questions, an LLM judge, and no hand audit. HHEM ran out of GPU memory next to the judge, so only the Gemma judge and AuditKIT scored this run.

@@ -86,18 +86,39 @@ if [ "${STOP_AFTER:-}" = "sft" ]; then rm -rf "$O/run_sft" "$O/smoke"; log "STOP
 if [ ! -f "$O/preds/tuned_dpo.jsonl" ] && [ ! -f "$MERGED_DIR/config.json" ]; then
   log "merge"; python scripts/05_train.py --stage merge
 fi
+# adapters saved before the 'ref' fix have no SOURCE file and may be TRL's untrained reference copy: redo DPO
+if [ -f "$O/adapter_dpo/adapter_config.json" ] && [ ! -f "$O/adapter_dpo/SOURCE" ]; then
+  log "discarding old adapter_dpo (it was TRL's untrained 'ref' copy) - DPO runs again"
+  rm -rf "$O/adapter_dpo" "$O/preds/tuned_dpo.jsonl"
+fi
 [ -f "$O/adapter_dpo/adapter_config.json" ] || { log "DPO"; python scripts/05_train.py --stage dpo; }
 rm -rf "$O/run_sft" "$O/run_dpo" "$O/smoke"   # checkpoints no longer needed once adapters exist
 if [ "${STOP_AFTER:-}" = "train" ]; then log "STOP_AFTER=train: adapters saved in $O"; exit 0; fi
 
 # ---- 4. answer the test set with 4 systems, then score --------------------------------------------
+# Head-to-head with the main pipeline: answer Sneha's exact 150 test questions (same chunks and split as ours,
+# none of them in our training data) and judge her fine-tuned answers with the same Gemma judge. SAME_TEST=0 skips.
+EXTRA=()
+if [ "${SAME_TEST:-1}" = "1" ]; then
+  RAW=https://raw.githubusercontent.com/snehapal0905/grounded-carbon-llm/main/outputs
+  mkdir -p "$O/main_run"
+  [ -f "$O/main_run/test_candidates.csv" ] || curl -fsSL "$RAW/test_candidates.csv" -o "$O/main_run/test_candidates.csv"
+  [ -f "$O/main_run/tuned_rag.jsonl" ] || curl -fsSL "$RAW/preds/tuned_rag.jsonl" -o "$O/main_run/tuned_rag.jsonl"
+  export TEST_CSV="$O/main_run/test_candidates.csv"
+  if [ ! -f "$O/.same_test" ]; then   # earlier preds were on our own test set: keep them aside
+    [ -d "$O/preds" ] && mv "$O/preds" "$O/preds_own_test"
+    [ -d "$O/results" ] && mv "$O/results" "$O/results_own_test"
+    touch "$O/.same_test"
+  fi
+  EXTRA=(--extra "$O/main_run/tuned_rag.jsonl:main_tuned")
+fi
 log "generate"; python scripts/06_generate.py
 if [ ! -f "$O/results/report.md" ]; then
   log "judge (gemma3:12b) + HHEM + AuditKIT"
   start_ollama; ollama pull gemma3:12b | tail -1
-  python scripts/07_evaluate.py
+  python scripts/07_evaluate.py "${EXTRA[@]}"
   stop_ollama
 fi
-cd "$O" && zip -qr $W0/karan_v2_results.zip sft pref test_candidates.csv preds results adapter_sft adapter_dpo
+cd "$O" && zip -qr $W0/karan_v2_results.zip sft pref test_candidates.csv main_run preds results adapter_sft adapter_dpo
 log "DONE -> $O/results/report.md and $W0/karan_v2_results.zip"
 cat "$O/results/report.md"
